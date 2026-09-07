@@ -1,0 +1,16 @@
+target: nvidia-jetson
+runtime:
+  primary: tensorrt
+  fallback: onnxruntime
+latency:
+  target_ms: 50
+  measurement: end_to_end_control_loop
+modalities:
+  - rgb
+  - depth
+  - proprioception
+  - tactile
+  - language
+safety:
+  physical_execution_authority: hoare
+  local_control_is_proposal_only: true
