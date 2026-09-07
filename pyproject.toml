@@ -1,0 +1,12 @@
+[project]
+name = "phyai-universal"
+version = "0.1.0"
+description = "Production-oriented physical AI workload contracts and runtime architecture"
+requires-python = ">=3.12"
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
