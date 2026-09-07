@@ -51,7 +51,9 @@ class ControlLoopLatencyHarness(Generic[T, U]):
             raise ValueError("warmup consumed all inputs")
 
         ordered = sorted(samples)
-        p95_index = min(len(ordered) - 1, max(0, int(len(ordered) * 0.95) - 1))
+        # Nearest-rank p95: rank = ceil(0.95 * N), converted to zero-based index.
+        p95_rank = max(1, int(len(ordered) * 0.95 + 0.999999999))
+        p95_index = min(len(ordered) - 1, p95_rank - 1)
         average = sum(samples) / len(samples)
         maximum = max(samples)
         p95 = ordered[p95_index]
