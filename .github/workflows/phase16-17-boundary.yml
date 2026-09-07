@@ -7,15 +7,31 @@ on:
       - 'src/production_hardening/phase16_17_boundary.py'
       - 'src/production_hardening/phase16_hoare_integration.py'
       - 'src/production_hardening/phase17_evidence.py'
+      - 'src/production_hardening/phase18_receipt_chain.py'
+      - 'src/phase1_contracts/**'
+      - 'src/phase2_sensors/**'
+      - 'src/phase3_simulation/**'
+      - 'src/phase4_surrogates/**'
+      - 'src/phase5_perception/**'
+      - 'src/phase6_control/**'
+      - 'src/phase7_reasoning/**'
+      - 'src/phase8_evaluation/**'
+      - 'src/production_hardening/learned_world_model.py'
+      - 'src/production_hardening/learned_multimodal.py'
+      - 'src/production_hardening/phase11_onnx.py'
+      - 'src/production_hardening/phase12_acceleration.py'
+      - 'src/production_hardening/phase13_latency.py'
+      - 'src/production_hardening/phase14_robustness.py'
+      - 'src/production_hardening/phase15_hil.py'
       - 'tests/unit/test_phase16_17_boundary.py'
+      - 'tests/test_phase_sequential_integrity.py'
       - '.github/workflows/phase16-17-boundary.yml'
   pull_request:
     branches: [main]
     paths:
-      - 'src/production_hardening/phase16_17_boundary.py'
-      - 'src/production_hardening/phase16_hoare_integration.py'
-      - 'src/production_hardening/phase17_evidence.py'
+      - 'src/**'
       - 'tests/unit/test_phase16_17_boundary.py'
+      - 'tests/test_phase_sequential_integrity.py'
       - '.github/workflows/phase16-17-boundary.yml'
 
 jobs:
@@ -29,3 +45,4 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install '.[test]'
       - run: python -m pytest tests/unit/test_phase16_17_boundary.py -q
+      - run: python -m pytest tests/test_phase_sequential_integrity.py -q
