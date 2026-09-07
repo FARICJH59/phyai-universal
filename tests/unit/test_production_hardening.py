@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from math import sqrt
 from uuid import uuid4
 
 import pytest
@@ -15,7 +16,7 @@ from src.production_hardening.hoare_boundary import (
 )
 from src.production_hardening.multimodal import ModalityInput, MultimodalFusion
 from src.production_hardening.robustness import MultimodalPerturbation, SensorNoiseHarness
-from src.production_hardening.trajectory import AutoregressiveTrajectoryGenerator, action_vector_from_mapping
+from src.production_hardening.trajectory import AutoregressiveTrajectoryGenerator
 from src.production_hardening.world_model import ActionCondition, ActionConditionedReferenceWorldModel, WorldModelRequest
 
 
