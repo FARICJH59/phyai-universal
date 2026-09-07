@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package phyai.v1;
+
+message ControlCommand {
+  string tenant_id = 1;
+  string project_id = 2;
+  string command_id = 3;
+  string attempt_id = 4;
+  uint64 sequence = 5;
+  int64 proposed_at_unix_nanos = 6;
+  string target_id = 7;
+  string command_type = 8;
+  bytes parameters = 9;
+  string parameters_encoding = 10;
+  double confidence = 11;
+  repeated string safety_precondition_ids = 12;
+  string scene_id = 13;
+  repeated string source_observation_ids = 14;
+  string provenance_uri = 15;
+  string schema_version = 16;
+}
