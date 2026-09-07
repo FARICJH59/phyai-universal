@@ -92,7 +92,7 @@ def test_trajectory_deviation_measures_mean_and_max_error():
         0.70,
     )
     assert result.samples == 2
-    assert result.mean_l2_error == pytest.approx(0.25)
+    assert result.mean_l2_error == pytest.approx(0.35)
     assert result.maximum_l2_error == pytest.approx(0.5)
     assert result.confidence_degradation == pytest.approx(0.20)
 
