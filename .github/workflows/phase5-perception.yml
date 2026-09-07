@@ -1,0 +1,30 @@
+name: phase5-perception
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/phase5_perception/**'
+      - 'src/phase1_contracts/**'
+      - 'src/phase2_sensors/**'
+      - 'tests/unit/test_phase5_perception.py'
+      - 'pyproject.toml'
+      - '.github/workflows/phase5-perception.yml'
+  pull_request:
+    paths:
+      - 'src/phase5_perception/**'
+      - 'src/phase1_contracts/**'
+      - 'src/phase2_sensors/**'
+      - 'tests/unit/test_phase5_perception.py'
+      - 'pyproject.toml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e '.[test]'
+      - run: python -m pytest tests/unit/test_phase5_perception.py -q
