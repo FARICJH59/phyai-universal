@@ -59,20 +59,29 @@ class PhysicalActuator(Protocol):
     def apply(self, request: ActuationRequest) -> ExecutionEvidence: ...
 
 
-class HoarePhysicalAdmission(Protocol):
-    def admit(self, request: ActuationRequest) -> bool: ...
+class GovernedExecutionAuthority(Protocol):
+    """Minimal authority proof supplied by the Phase 16 governance boundary."""
+
+    accepted: bool
+    attempt_id: object
+    capability_id: str | None
+    lease_id: str | None
+    fence_id: str | None
 
 
 class HardwareInLoopBoundary:
-    """Physical I/O adapter that requires explicit HOARE admission before actuation."""
+    """Physical I/O adapter that requires Phase 16-style authority before actuation."""
 
-    def __init__(self, admission: HoarePhysicalAdmission, actuator: PhysicalActuator) -> None:
-        self._admission = admission
+    def __init__(self, actuator: PhysicalActuator) -> None:
         self._actuator = actuator
 
-    def execute(self, request: ActuationRequest) -> ExecutionEvidence:
-        if not self._admission.admit(request):
+    def execute(self, request: ActuationRequest, authority: GovernedExecutionAuthority) -> ExecutionEvidence:
+        if not authority.accepted:
             raise PermissionError("HOARE admission denied; physical actuation blocked")
+        if str(authority.attempt_id) != request.attempt_id:
+            raise ValueError("governed authority attempt identity mismatch")
+        if not all((authority.capability_id, authority.lease_id, authority.fence_id)):
+            raise PermissionError("governed authority is incomplete")
         evidence = self._actuator.apply(request)
         if evidence.attempt_id != request.attempt_id or evidence.device_id != request.device_id:
             raise ValueError("execution evidence identity mismatch")
