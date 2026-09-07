@@ -34,13 +34,15 @@ def test_safety_gate_fails_closed_without_parameters():
 
 
 def test_control_pipeline_creates_proposal_only():
+    source = scene()
     command = ControlPipeline().propose(
-        scene(), target_id="robot-1", command_type="velocity",
+        source, target_id="robot-1", command_type="velocity",
         parameters={"velocity": 1.0}, safety_precondition_ids=("precondition:clear-path",),
     )
-    assert command.tenant_id == "t1"
-    assert command.project_id == "p1"
-    assert command.scene_id == scene.__name__ if False else command.scene_id
+    assert command.tenant_id == source.tenant_id
+    assert command.project_id == source.project_id
+    assert command.scene_id == source.scene_id
+    assert command.source_observation_ids == source.source_observation_ids
     assert command.is_authorization_free_proposal
     assert not hasattr(command, "lease")
     assert not hasattr(command, "capability")
