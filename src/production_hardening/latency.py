@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import ceil
 from time import perf_counter_ns
 from typing import Callable, Generic, Sequence, TypeVar
 
@@ -52,7 +53,7 @@ class ControlLoopLatencyHarness(Generic[T, U]):
 
         ordered = sorted(samples)
         # Nearest-rank p95: rank = ceil(0.95 * N), converted to zero-based index.
-        p95_rank = max(1, int(len(ordered) * 0.95 + 0.999999999))
+        p95_rank = max(1, ceil(len(ordered) * 0.95))
         p95_index = min(len(ordered) - 1, p95_rank - 1)
         average = sum(samples) / len(samples)
         maximum = max(samples)
