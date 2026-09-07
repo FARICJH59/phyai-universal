@@ -14,7 +14,7 @@ from src.production_hardening.hoare_boundary import (
     HoareExecutionBoundary,
 )
 from src.production_hardening.multimodal import ModalityInput, MultimodalFusion
-from src.production_hardening.robustness import SensorNoiseHarness
+from src.production_hardening.robustness import MultimodalPerturbation, SensorNoiseHarness
 from src.production_hardening.trajectory import AutoregressiveTrajectoryGenerator, action_vector_from_mapping
 from src.production_hardening.world_model import ActionCondition, ActionConditionedReferenceWorldModel, WorldModelRequest
 
@@ -74,6 +74,45 @@ def test_noise_harness_detects_perturbation():
     case = SensorNoiseHarness.bit_flip()
     result = SensorNoiseHarness.evaluate(b"sensor-frame", case)
     assert result.changed is True
+
+
+def test_output_sensitivity_measures_delta_and_confidence_degradation():
+    result = SensorNoiseHarness.evaluate_output([1.0, 2.0], [1.0, 2.5], 0.95, 0.80)
+    assert result.l2_delta == pytest.approx(0.5)
+    assert result.relative_delta == pytest.approx(0.5 / sqrt(5.0))
+    assert result.confidence_degradation == pytest.approx(0.15)
+
+
+def test_trajectory_deviation_measures_mean_and_max_error():
+    result = SensorNoiseHarness.evaluate_trajectory(
+        [{"position": 1.0}, {"position": 3.0}],
+        [{"position": 1.2}, {"position": 2.5}],
+        0.90,
+        0.70,
+    )
+    assert result.samples == 2
+    assert result.mean_l2_error == pytest.approx(0.25)
+    assert result.maximum_l2_error == pytest.approx(0.5)
+    assert result.confidence_degradation == pytest.approx(0.20)
+
+
+def test_multimodal_perturbation_changes_only_selected_modality():
+    modalities = {"rgb": b"rgb", "depth": b"depth"}
+    result = SensorNoiseHarness.perturb_modalities(
+        modalities, [MultimodalPerturbation("depth", SensorNoiseHarness.bit_flip())]
+    )
+    assert result["rgb"] == b"rgb"
+    assert result["depth"] != b"depth"
+
+
+def test_robustness_rejects_mismatched_output_lengths():
+    with pytest.raises(ValueError):
+        SensorNoiseHarness.evaluate_output([1.0], [1.0, 2.0], 0.9, 0.9)
+
+
+def test_robustness_rejects_mismatched_trajectory_shapes():
+    with pytest.raises(ValueError):
+        SensorNoiseHarness.evaluate_trajectory([{"x": 1.0}], [{"y": 1.0}], 0.9, 0.9)
 
 
 def test_hoare_boundary_enforces_tenant_and_project_context_before_submission():
