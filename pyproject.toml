@@ -5,7 +5,10 @@ description = "Production-oriented physical AI workload contracts and runtime ar
 requires-python = ">=3.12"
 
 [project.optional-dependencies]
-test = ["pytest>=8,<10"]
+test = [
+    "pytest>=8,<10",
+    "numpy>=1.26,<3",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
