@@ -4,15 +4,33 @@ Phase 15 introduces the physical I/O boundary without pretending that CI is a ph
 
 ## Control path
 
-`physical sensor → HardwareObservation → perception/reasoning → control proposal → HOARE admission → ActuationRequest → physical actuator → ExecutionEvidence → verification`
+`physical sensor → HardwareObservation → perception/reasoning → control proposal → Phase 16 HOARE admission → governed authority → ActuationRequest → physical actuator → ExecutionEvidence → Phase 17 verification`
 
-The adapter requires an explicit admission decision before calling the actuator. A denied decision fails closed. Evidence must preserve the attempt and device identity and must be verified before the boundary returns success.
+The Phase 15 adapter requires an explicit governed authority proof before calling the actuator. The proof must be accepted, must bind to the request attempt, and must contain capability, lease, and fence identifiers. A denied or incomplete authority proof fails closed before the actuator is called.
 
 ## Identity and replay controls
 
 Hardware observations carry tenant, project, device, sequence, and timestamp identity. A sensor sequence validator rejects cross-tenant/project observations and non-increasing sequence numbers.
 
-Actuation requests carry tenant, project, device, attempt, command digest, and parameters. This phase does not mint attempts, capabilities, leases, fences, or authorization; those remain HOARE responsibilities.
+Actuation requests carry tenant, project, device, attempt, command digest, and parameters. Phase 15 does not mint attempts, capabilities, leases, fences, or authorization. Authority remains a Phase 16 HOARE/AEGIS/TCX responsibility and is passed into this boundary as an explicit proof.
+
+## Sequential boundary
+
+The intended runtime dependency is:
+
+```text
+Phase 6 control proposal
+        ↓
+Phase 16 governed admission
+        ↓
+Phase 15 physical/HIL execution
+        ↓
+Phase 17 cryptographic evidence verification
+        ↓
+Phase 18 receipt chain
+```
+
+Phase numbers describe implementation progression; this diagram describes the authority dependency. Physical execution is not permitted merely because a physical adapter exists.
 
 ## Test status boundary
 
