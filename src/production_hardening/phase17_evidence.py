@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 import hmac
-from typing import Mapping, Protocol
+from typing import Protocol
 from uuid import UUID
 
 
@@ -35,19 +35,7 @@ class ExecutionIdentity:
                 raise ValueError(f"{name} is required")
 
     def canonical(self) -> str:
-        return "|".join(
-            (
-                self.tenant_id,
-                self.project_id,
-                str(self.command_id),
-                str(self.attempt_id),
-                self.artifact_hash,
-                self.capability_id,
-                self.lease_id,
-                self.fence_id,
-                self.policy_digest,
-            )
-        )
+        return "|".join((self.tenant_id, self.project_id, str(self.command_id), str(self.attempt_id), self.artifact_hash, self.capability_id, self.lease_id, self.fence_id, self.policy_digest))
 
     def digest(self) -> str:
         return sha256(self.canonical().encode("utf-8")).hexdigest()
@@ -92,14 +80,12 @@ class HMACSHA256Signer:
         return hmac.new(self._secret, message, "sha256").hexdigest()
 
     def verify(self, message: bytes, signature: str) -> bool:
-        expected = self.sign(message)
-        return hmac.compare_digest(expected, signature)
+        return hmac.compare_digest(self.sign(message), signature)
 
 
 def sign_admission(identity: ExecutionIdentity, signer: AdmissionSigner) -> SignedAdmissionArtifact:
     digest = identity.digest()
-    signature = signer.sign(digest.encode("ascii"))
-    return SignedAdmissionArtifact(identity, digest, signer.key_id, signer.algorithm, signature)
+    return SignedAdmissionArtifact(identity, digest, signer.key_id, signer.algorithm, signer.sign(digest.encode("ascii")))
 
 
 def verify_admission(artifact: SignedAdmissionArtifact, signer: AdmissionSigner) -> bool:
@@ -121,12 +107,7 @@ class ExecutionEvidence:
     admission_signature: str
 
     def __post_init__(self) -> None:
-        for name, value in (
-            ("identity_digest", self.identity_digest),
-            ("device_id", self.device_id),
-            ("result_digest", self.result_digest),
-            ("admission_signature", self.admission_signature),
-        ):
+        for name, value in (("identity_digest", self.identity_digest), ("device_id", self.device_id), ("result_digest", self.result_digest), ("admission_signature", self.admission_signature)):
             if not value.strip():
                 raise ValueError(f"{name} is required")
         if self.sequence < 0 or self.timestamp_ns < 0:
@@ -142,8 +123,7 @@ class DurableReceipt:
     receipt_digest: str
 
     def __post_init__(self) -> None:
-        expected = self.compute_digest(self.identity_digest, self.attempt_id, self.sequence, self.result_digest)
-        if self.receipt_digest != expected:
+        if self.receipt_digest != self.compute_digest(self.identity_digest, self.attempt_id, self.sequence, self.result_digest):
             raise ValueError("receipt digest mismatch")
 
     @staticmethod
@@ -177,14 +157,7 @@ class EvidenceVerifier:
     def __init__(self, store: EvidenceStore) -> None:
         self._store = store
 
-    def verify_evidence(
-        self,
-        admission: SignedAdmissionArtifact,
-        evidence: ExecutionEvidence,
-        signer: AdmissionSigner,
-        *,
-        expected_device_id: str,
-    ) -> None:
+    def verify_evidence(self, admission: SignedAdmissionArtifact, evidence: ExecutionEvidence, signer: AdmissionSigner, *, expected_device_id: str) -> None:
         if not verify_admission(admission, signer):
             raise PermissionError("invalid admission signature")
         if evidence.identity_digest != admission.identity_digest:
@@ -197,19 +170,8 @@ class EvidenceVerifier:
             raise ValueError("evidence device identity mismatch")
 
     def commit_receipt(self, evidence: ExecutionEvidence) -> DurableReceipt:
-        receipt_digest = DurableReceipt.compute_digest(
-            evidence.identity_digest,
-            evidence.attempt_id,
-            evidence.sequence,
-            evidence.result_digest,
-        )
-        receipt = DurableReceipt(
-            evidence.identity_digest,
-            evidence.attempt_id,
-            evidence.sequence,
-            evidence.result_digest,
-            receipt_digest,
-        )
+        receipt_digest = DurableReceipt.compute_digest(evidence.identity_digest, evidence.attempt_id, evidence.sequence, evidence.result_digest)
+        receipt = DurableReceipt(evidence.identity_digest, evidence.attempt_id, evidence.sequence, evidence.result_digest, receipt_digest)
         if self._store.contains(receipt.receipt_digest):
             raise ValueError("duplicate receipt replay")
         self._store.record(receipt)
