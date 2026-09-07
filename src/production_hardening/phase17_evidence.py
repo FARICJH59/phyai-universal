@@ -6,6 +6,9 @@ import hmac
 from typing import Protocol
 from uuid import UUID
 
+from src.phase1_contracts.contracts import ControlCommand
+from src.production_hardening.phase16_hoare_integration import GovernedAdmission
+
 
 @dataclass(frozen=True, slots=True)
 class ExecutionIdentity:
@@ -22,15 +25,7 @@ class ExecutionIdentity:
     policy_digest: str
 
     def __post_init__(self) -> None:
-        for name, value in (
-            ("tenant_id", self.tenant_id),
-            ("project_id", self.project_id),
-            ("artifact_hash", self.artifact_hash),
-            ("capability_id", self.capability_id),
-            ("lease_id", self.lease_id),
-            ("fence_id", self.fence_id),
-            ("policy_digest", self.policy_digest),
-        ):
+        for name, value in (("tenant_id", self.tenant_id), ("project_id", self.project_id), ("artifact_hash", self.artifact_hash), ("capability_id", self.capability_id), ("lease_id", self.lease_id), ("fence_id", self.fence_id), ("policy_digest", self.policy_digest)):
             if not value.strip():
                 raise ValueError(f"{name} is required")
 
@@ -39,6 +34,16 @@ class ExecutionIdentity:
 
     def digest(self) -> str:
         return sha256(self.canonical().encode("utf-8")).hexdigest()
+
+    @classmethod
+    def from_governed_admission(cls, command: ControlCommand, artifact_hash: str, policy_digest: str, admission: GovernedAdmission) -> "ExecutionIdentity":
+        if not admission.accepted:
+            raise PermissionError("cannot create execution identity from denied admission")
+        if admission.attempt_id != command.attempt_id:
+            raise ValueError("governed admission attempt identity mismatch")
+        if not admission.capability_id or not admission.lease_id or not admission.fence_id:
+            raise ValueError("accepted admission is missing authority")
+        return cls(command.tenant_id, command.project_id, command.command_id, admission.attempt_id, artifact_hash, admission.capability_id, admission.lease_id, admission.fence_id, policy_digest)
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,7 +66,6 @@ class AdmissionSigner(Protocol):
     algorithm: str
 
     def sign(self, message: bytes) -> str: ...
-
     def verify(self, message: bytes, signature: str) -> bool: ...
 
 
@@ -134,7 +138,6 @@ class DurableReceipt:
 
 class EvidenceStore(Protocol):
     def contains(self, receipt_digest: str) -> bool: ...
-
     def record(self, receipt: DurableReceipt) -> None: ...
 
 
@@ -168,6 +171,10 @@ class EvidenceVerifier:
             raise ValueError("evidence admission binding mismatch")
         if evidence.device_id != expected_device_id:
             raise ValueError("evidence device identity mismatch")
+
+    def commit_verified_evidence(self, admission: SignedAdmissionArtifact, evidence: ExecutionEvidence, signer: AdmissionSigner, *, expected_device_id: str) -> DurableReceipt:
+        self.verify_evidence(admission, evidence, signer, expected_device_id=expected_device_id)
+        return self.commit_receipt(evidence)
 
     def commit_receipt(self, evidence: ExecutionEvidence) -> DurableReceipt:
         receipt_digest = DurableReceipt.compute_digest(evidence.identity_digest, evidence.attempt_id, evidence.sequence, evidence.result_digest)
