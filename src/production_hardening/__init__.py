@@ -27,6 +27,17 @@ from .phase12_acceleration import (
 )
 from .phase13_latency import EndToEndLatencyHarness, EndToEndLatencyReport, LatencySample
 from .phase14_robustness import RobustnessEvaluation, RobustnessThreshold, SimToRealRobustnessHarness, perturb_modalities
+from .phase17_evidence import (
+    DurableReceipt,
+    ExecutionEvidence,
+    ExecutionIdentity,
+    EvidenceVerifier,
+    HMACSHA256Signer,
+    InMemoryEvidenceStore,
+    SignedAdmissionArtifact,
+    sign_admission,
+    verify_admission,
+)
 
 __all__ = [
     "ActionCondition",
@@ -63,4 +74,13 @@ __all__ = [
     "RobustnessThreshold",
     "SimToRealRobustnessHarness",
     "perturb_modalities",
+    "ExecutionIdentity",
+    "SignedAdmissionArtifact",
+    "HMACSHA256Signer",
+    "sign_admission",
+    "verify_admission",
+    "ExecutionEvidence",
+    "DurableReceipt",
+    "EvidenceVerifier",
+    "InMemoryEvidenceStore",
 ]
