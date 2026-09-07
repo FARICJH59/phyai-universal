@@ -26,6 +26,7 @@ from .phase12_acceleration import (
     TimedCudaKernel,
 )
 from .phase13_latency import EndToEndLatencyHarness, EndToEndLatencyReport, LatencySample
+from .phase14_robustness import RobustnessEvaluation, RobustnessThreshold, SimToRealRobustnessHarness, perturb_modalities
 
 __all__ = [
     "ActionCondition",
@@ -58,4 +59,8 @@ __all__ = [
     "EndToEndLatencyHarness",
     "EndToEndLatencyReport",
     "LatencySample",
+    "RobustnessEvaluation",
+    "RobustnessThreshold",
+    "SimToRealRobustnessHarness",
+    "perturb_modalities",
 ]
