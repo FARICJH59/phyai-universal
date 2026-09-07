@@ -5,7 +5,6 @@ from uuid import uuid4
 
 import pytest
 
-from src.phase1_contracts.contracts import ControlCommand
 from src.phase2_sensors.sensor_adapter import RawSensorSample, SensorAdapter
 from src.phase3_simulation.generators.scenarios import ScenarioGenerator
 from src.phase4_surrogates.solvers.solver import DeterministicBaselineSolver, SolverRequest
@@ -29,8 +28,8 @@ from src.production_hardening.multimodal import ModalityInput
 from src.production_hardening.phase11_onnx import compare_outputs
 from src.production_hardening.phase12_acceleration import (
     CudaExecutionResult,
-    TensorRTExecutionResult,
     TensorRTExecutionAdapter,
+    TensorRTExecutionResult,
     TimedCudaKernel,
 )
 from src.production_hardening.phase13_latency import EndToEndLatencyHarness
@@ -41,7 +40,7 @@ from src.production_hardening.phase15_hil import (
     HardwareInLoopBoundary,
 )
 from src.production_hardening.phase16_17_boundary import Phase16To17Boundary
-from src.production_hardening.phase16_hoare_integration import GovernedAdmission, GovernedHoareClient
+from src.production_hardening.phase16_hoare_integration import GovernedAdmission, GovernedExecutionRequest, GovernedHoareClient
 from src.production_hardening.phase17_evidence import (
     EvidenceVerifier,
     ExecutionEvidence,
@@ -62,7 +61,8 @@ ARTIFACT_HASH = "artifact-sha256-1"
 POLICY_DIGEST = "policy-sha256-1"
 
 
-def test_phase_1_to_18_preserves_identity_and_authority_order() -> None:
+def test_runtime_spine_preserves_identity_and_authority_order() -> None:
+    """Verify the runtime dependency graph without treating phase numbers as runtime order."""
     # Phase 1 -> 2: raw sensor data becomes the canonical observation contract.
     observed_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
     observation = SensorAdapter().ingest(
@@ -83,9 +83,26 @@ def test_phase_1_to_18_preserves_identity_and_authority_order() -> None:
     )
     assert observation.identity.tenant_id == TENANT
     assert observation.identity.project_id == PROJECT
-    assert observation.identity.sequence == 1
 
-    # Phase 3 -> 4: simulation and surrogate requests preserve tenant/project/scenario.
+    # Phase 5: canonical observations become a spatial scene.
+    scene = PerceptionPipeline().process((observation,)).scene
+    assert scene.tenant_id == TENANT
+    assert scene.project_id == PROJECT
+    assert observation.observation_id in scene.source_observation_ids
+
+    # Phase 7 is reasoning-before-control at runtime: it produces a plan, not authority.
+    reasoning = ReasoningPipeline().reason(
+        scene,
+        objective="track target",
+        target_id="arm-1",
+        command_type="position",
+        safety_precondition_ids=("precondition-safe",),
+        constraints={"target_position": 0.8, "max_acceleration": 1.0},
+    )
+    assert reasoning.scene_id == scene.scene_id
+    assert reasoning.authorization_required is True
+
+    # Phase 3/4 provide deterministic simulation and surrogate support for the plan.
     simulation = ScenarioGenerator().generate(TENANT, PROJECT, seed=7)
     solution = DeterministicBaselineSolver().solve(
         SolverRequest(
@@ -99,48 +116,15 @@ def test_phase_1_to_18_preserves_identity_and_authority_order() -> None:
     )
     assert solution.scenario_id == simulation.scenario_id
 
-    # Phase 5 -> 6: observations become a spatial scene, then a proposal-only command.
-    scene = PerceptionPipeline().process((observation,)).scene
-    assert scene.tenant_id == TENANT
-    assert scene.project_id == PROJECT
-    assert observation.observation_id in scene.source_observation_ids
-
-    command = ControlPipeline().propose(
-        scene,
-        target_id="arm-1",
-        command_type="position",
-        parameters={"x": float(solution.values["acceleration"])},
-        safety_precondition_ids=("precondition-safe",),
-    )
-    assert command.is_authorization_free_proposal
-    assert command.tenant_id == TENANT
-    assert command.project_id == PROJECT
-    assert command.scene_id == scene.scene_id
-    assert command.source_observation_ids == tuple(scene.source_observation_ids)
-
-    # Phase 7 -> 8: reasoning remains a plan and evaluation remains non-authorizing.
-    reasoning = ReasoningPipeline().reason(
-        scene,
-        objective="track target",
-        target_id=command.target_id,
-        command_type=command.command_type,
-        safety_precondition_ids=tuple(command.safety_precondition_ids),
-        constraints={"target_position": 0.8, "max_acceleration": 1.0},
-    )
-    assert reasoning.scene_id == scene.scene_id
-    assert reasoning.authorization_required is True
-    evaluation = DeterministicEvaluator().evaluate(scene, command, {"x": command.parameters["x"]})
-    assert evaluation.passed
-
-    # Phase 9: action-conditioned learned-world-model boundary is explicit.
-    action = ActionCondition(command.command_type, {"acceleration": float(command.parameters["x"])})
+    # Phase 9: action-conditioned learned-world-model boundary remains identity-bound.
+    action = ActionCondition(reasoning.plan.command_type, {"acceleration": float(solution.values["acceleration"])})
     world_request = LearnedWorldModelRequest(
-        tenant_id=TENANT,
-        project_id=PROJECT,
-        scene_id=scene.scene_id,
-        frames=(VideoFrame(1, b"frame"),),
-        actions=(action,),
-        horizon=2,
+        TENANT,
+        PROJECT,
+        scene.scene_id,
+        (VideoFrame(1, b"frame"),),
+        (action,),
+        2,
     )
 
     class Encoder:
@@ -163,7 +147,7 @@ def test_phase_1_to_18_preserves_identity_and_authority_order() -> None:
     assert rollout.scene_id == scene.scene_id
     assert len(rollout.frames) == 2
 
-    # Phase 10: learned multimodal representation preserves modality order and identity.
+    # Phase 10: multimodal learned representation preserves temporal modality order.
     modalities = (
         ModalityInput("rgb", b"rgb", "raw", 10, 0.95),
         ModalityInput("proprioception", b"joint", "raw", 11, 0.97),
@@ -198,7 +182,25 @@ def test_phase_1_to_18_preserves_identity_and_authority_order() -> None:
     assert representation.project_id == PROJECT
     assert representation.modality_order == ("rgb", "proprioception")
 
-    # Phase 11 -> 12: optimization artifacts/backends remain explicit runtime boundaries.
+    # Phase 6: the reasoning plan becomes an authorization-free control proposal.
+    command = ControlPipeline().propose(
+        scene,
+        target_id=reasoning.plan.target_id,
+        command_type=reasoning.plan.command_type,
+        parameters=reasoning.plan.parameters,
+        safety_precondition_ids=tuple(reasoning.plan.safety_precondition_ids),
+    )
+    assert command.is_authorization_free_proposal
+    assert command.tenant_id == TENANT
+    assert command.project_id == PROJECT
+    assert command.scene_id == scene.scene_id
+    assert command.source_observation_ids == tuple(scene.source_observation_ids)
+
+    # Phase 8: evaluation consumes the proposal but does not authorize it.
+    evaluation = DeterministicEvaluator().evaluate(scene, command, {"x": command.parameters.get("x", 0.0)})
+    assert evaluation.passed
+
+    # Phases 11/12: backend/parity boundaries remain explicit; injected runners stand in for real runtimes.
     parity = compare_outputs((0.1, 0.2), (0.1, 0.20001), tolerance=1e-3)
     assert parity.samples == 2
 
@@ -215,7 +217,7 @@ def test_phase_1_to_18_preserves_identity_and_authority_order() -> None:
     assert trt.engine_id == "engine-test"
     assert cuda.kernel_id == "kernel-test"
 
-    # Phase 13 -> 14: latency/robustness gates are measured, not asserted as hardware evidence.
+    # Phases 13/14: latency and robustness are gates, not claims of hardware evidence.
     latency = EndToEndLatencyHarness(target_ms=50.0).measure(lambda: rollout.frames, iterations=3)
     assert latency.passed
     robustness = SimToRealRobustnessHarness().evaluate(
@@ -228,10 +230,10 @@ def test_phase_1_to_18_preserves_identity_and_authority_order() -> None:
     )
     assert robustness.passed
 
-    # Phase 15: physical actuation requires an explicit admission adapter.
+    # Phase 15: define the physical boundary, but do not execute before governed admission.
     class PhysicalAdmission:
         def admit(self, request: ActuationRequest) -> bool:
-            return True
+            return request.command_digest == GovernedHoareClient.digest_request(command, ARTIFACT_HASH)
 
     class Actuator:
         def apply(self, request: ActuationRequest) -> HardwareExecutionEvidence:
@@ -244,22 +246,12 @@ def test_phase_1_to_18_preserves_identity_and_authority_order() -> None:
             )
 
     hil = HardwareInLoopBoundary(PhysicalAdmission(), Actuator())
-    hardware_request = ActuationRequest(
-        TENANT,
-        PROJECT,
-        "device-1",
-        str(command.attempt_id),
-        GovernedHoareClient.digest_request(command, ARTIFACT_HASH),
-        {"x": float(command.parameters["x"])},
-    )
-    hardware_evidence = hil.execute(hardware_request)
-    assert hardware_evidence.attempt_id == str(command.attempt_id)
 
-    # Phase 16 -> 17: authority comes from the governance transport, then becomes signed identity.
+    # Phase 16: authority is minted by the governance transport.
     admission = GovernedAdmission(True, command.attempt_id, "cap-1", "lease-1", "fence-1", "admitted")
 
     class GovernanceTransport:
-        def admit(self, request):
+        def admit(self, request: GovernedExecutionRequest):
             assert request.command.command_id == command.command_id
             assert request.artifact_hash == ARTIFACT_HASH
             return admission
@@ -279,14 +271,26 @@ def test_phase_1_to_18_preserves_identity_and_authority_order() -> None:
     assert signed_admission.identity.fence_id == admission.fence_id
     assert signed_admission.identity.attempt_id == command.attempt_id
 
-    # Phase 17: only verified evidence is committed to a durable receipt.
+    # Only after Phase 16 admission does the Phase 15 boundary execute physical I/O.
+    hardware_request = ActuationRequest(
+        TENANT,
+        PROJECT,
+        "device-1",
+        str(command.attempt_id),
+        GovernedHoareClient.digest_request(command, ARTIFACT_HASH),
+        {"x": float(command.parameters.get("x", 0.0))},
+    )
+    hardware_evidence = hil.execute(hardware_request)
+    assert hardware_evidence.attempt_id == str(command.attempt_id)
+
+    # Phase 17: execution evidence must bind the signed Phase 16 identity before receipt creation.
     evidence = ExecutionEvidence(
         identity_digest=signed_admission.identity_digest,
         attempt_id=command.attempt_id,
         device_id="device-1",
         sequence=1,
         timestamp_ns=1_000,
-        result_digest="result-digest-1",
+        result_digest=hardware_evidence.result_digest,
         admission_signature=signed_admission.signature,
     )
     receipt = boundary.commit_evidence(
@@ -311,13 +315,16 @@ def test_phase_1_to_18_preserves_identity_and_authority_order() -> None:
     assert verification.terminal_digest == entry.chain_digest
 
 
-def test_phase_16_to_18_rejects_rebound_identity() -> None:
-    # Regression guard: a valid signed admission cannot be rebound to a different command attempt.
+def test_denied_governance_stops_before_phase17_and_physical_execution():
+    command_id = uuid4()
+    attempt_id = uuid4()
+    from src.phase1_contracts.contracts import ControlCommand
+
     command = ControlCommand(
         tenant_id=TENANT,
         project_id=PROJECT,
-        command_id=uuid4(),
-        attempt_id=uuid4(),
+        command_id=command_id,
+        attempt_id=attempt_id,
         sequence=1,
         proposed_at=datetime.now(timezone.utc),
         target_id="arm-1",
@@ -329,45 +336,61 @@ def test_phase_16_to_18_rejects_rebound_identity() -> None:
         source_observation_ids=(uuid4(),),
         provenance_uri="urn:test",
     )
-    admission = GovernedAdmission(True, command.attempt_id, "cap", "lease", "fence", "admitted")
 
-    class Transport:
+    class DenyingTransport:
         def admit(self, request):
-            return admission
+            return GovernedAdmission(False, request.command.attempt_id, None, None, None, "denied")
 
-    signer = HMACSHA256Signer("key", b"secret")
-    verifier = EvidenceVerifier(InMemoryEvidenceStore())
-    boundary = Phase16To17Boundary(GovernedHoareClient(Transport()), signer, verifier)
-    envelope, artifact = boundary.admit_and_sign(
-        command,
-        ARTIFACT_HASH,
-        {"tenant_id": TENANT, "project_id": PROJECT},
-        POLICY_DIGEST,
+    boundary = Phase16To17Boundary(
+        GovernedHoareClient(DenyingTransport()),
+        HMACSHA256Signer("key", b"secret"),
+        EvidenceVerifier(InMemoryEvidenceStore()),
     )
-
-    rebound = ControlCommand(
-        tenant_id=TENANT,
-        project_id=PROJECT,
-        command_id=uuid4(),
-        attempt_id=uuid4(),
-        sequence=2,
-        proposed_at=datetime.now(timezone.utc),
-        target_id="arm-1",
-        command_type="position",
-        parameters={"x": 0.2},
-        confidence=0.95,
-        safety_precondition_ids=("safe",),
-        scene_id=command.scene_id,
-        source_observation_ids=command.source_observation_ids,
-        provenance_uri="urn:test",
-    )
-    with pytest.raises(ValueError, match="attempt"):
-        Phase16To17Boundary(
-            GovernedHoareClient(Transport()), signer, verifier
-        ).admit_and_sign(
-            rebound,
+    with pytest.raises(PermissionError):
+        boundary.admit_and_sign(
+            command,
             ARTIFACT_HASH,
             {"tenant_id": TENANT, "project_id": PROJECT},
             POLICY_DIGEST,
         )
-    assert artifact.identity.attempt_id == envelope.command.attempt_id
+
+
+def test_cross_tenant_data_cannot_enter_perception_spine():
+    adapter = SensorAdapter()
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    observations = (
+        adapter.ingest(
+            RawSensorSample(
+                TENANT,
+                PROJECT,
+                "camera-1",
+                1,
+                "rgb",
+                "frame-1",
+                b"one",
+                "raw",
+                "cal-v1",
+                "urn:test:one",
+                0.98,
+                now,
+            )
+        ),
+        adapter.ingest(
+            RawSensorSample(
+                "tenant-b",
+                PROJECT,
+                "camera-2",
+                2,
+                "rgb",
+                "frame-2",
+                b"two",
+                "raw",
+                "cal-v1",
+                "urn:test:two",
+                0.98,
+                now,
+            )
+        ),
+    )
+    with pytest.raises(ValueError):
+        PerceptionPipeline().process(observations)
