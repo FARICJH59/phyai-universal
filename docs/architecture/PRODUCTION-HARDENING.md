@@ -1,6 +1,6 @@
 # Production Hardening
 
-The eight PHyAI-Universal workload phases establish the domain pipeline. This layer adds concrete model, trajectory, multimodal, deployment, robustness, and HOARE-boundary capabilities without creating a second authority plane.
+The PHyAI-Universal workload phases establish the domain pipeline. This layer adds concrete model, trajectory, multimodal, deployment, robustness, and HOARE-boundary capabilities without creating a second authority plane.
 
 ## World modeling and trajectories
 
@@ -24,9 +24,9 @@ The eight PHyAI-Universal workload phases establish the domain pipeline. This la
 
 ## Sim-to-real robustness
 
-`production_hardening.robustness` now supports three measurable layers: byte-level perturbation detection, numeric output sensitivity, and trajectory deviation. Output sensitivity reports L2 delta, relative delta, and confidence degradation. Trajectory evaluation reports mean/max L2 deviation, sample count, and confidence degradation. `MultimodalPerturbation` allows a deterministic perturbation to be applied to a named RGB, depth, proprioception, tactile, or language modality while leaving other modality payloads unchanged.
+`production_hardening.robustness` supports measurable evaluation layers: byte-level perturbation detection, numeric output sensitivity, trajectory deviation, and named-modality perturbation. Output sensitivity reports L2 delta, relative delta, and confidence degradation. Trajectory evaluation reports mean/max L2 deviation, sample count, and confidence degradation. `MultimodalPerturbation` can perturb a selected RGB, depth, proprioception, tactile, or language payload while leaving other modality payloads unchanged.
 
-These are evaluation primitives, not claims of physical robustness. Real sensor captures, learned-model outputs, and hardware-in-the-loop runs are still required before making sim-to-real performance claims.
+These are evaluation primitives, not claims of physical robustness. Real sensor captures, learned-model outputs, hardware-in-the-loop runs, and sim-to-real trials are still required before making physical deployment performance claims.
 
 ## HOARE boundary
 
@@ -49,5 +49,5 @@ These are evaluation primitives, not claims of physical robustness. Real sensor 
 | Output sensitivity evaluation | Implemented |
 | Trajectory deviation evaluation | Implemented |
 | Multimodal perturbation harness | Implemented |
-| Physical sim-to-real robustness | Not yet claimed; HIL evidence required |
+| Physical sim-to-real robustness | Not yet demonstrated; HIL evidence required |
 | Physical execution governance | HOARE boundary defined |
