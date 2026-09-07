@@ -1,0 +1,25 @@
+name: Phase 17 Evidence
+
+on:
+  push:
+    paths:
+      - 'src/production_hardening/phase17_evidence.py'
+      - 'tests/unit/test_phase17_evidence.py'
+      - '.github/workflows/phase17-evidence.yml'
+  pull_request:
+    paths:
+      - 'src/production_hardening/phase17_evidence.py'
+      - 'tests/unit/test_phase17_evidence.py'
+      - '.github/workflows/phase17-evidence.yml'
+
+jobs:
+  phase17-evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install '.[test]'
+      - run: python -m pytest tests/unit/test_phase17_evidence.py -q
