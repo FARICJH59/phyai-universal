@@ -19,6 +19,12 @@ from .learned_multimodal import (
     LearnedMultimodalEncoder,
     TensorModalityInput,
 )
+from .phase12_acceleration import (
+    CudaExecutionResult,
+    TensorRTExecutionAdapter,
+    TensorRTExecutionResult,
+    TimedCudaKernel,
+)
 
 __all__ = [
     "ActionCondition",
@@ -44,4 +50,8 @@ __all__ = [
     "ModalityEncoder",
     "LearnedMultimodalEncoder",
     "TensorModalityInput",
+    "TensorRTExecutionAdapter",
+    "TensorRTExecutionResult",
+    "TimedCudaKernel",
+    "CudaExecutionResult",
 ]
