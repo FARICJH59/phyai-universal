@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import Mapping
-from uuid import UUID
 
 from src.phase1_contracts.contracts import ControlCommand
 from src.production_hardening.phase16_hoare_integration import GovernedAdmission, GovernedHoareClient
@@ -33,7 +32,7 @@ class Phase16AdmissionEnvelope:
             raise PermissionError("denied admission cannot enter Phase 17")
         if self.admission.attempt_id != self.command.attempt_id:
             raise ValueError("admission attempt identity mismatch")
-        if self.command.tenant_id == "" or self.command.project_id == "":
+        if not self.command.tenant_id or not self.command.project_id:
             raise ValueError("command tenant/project identity is required")
 
 
@@ -54,9 +53,7 @@ class Phase16To17Boundary:
     ) -> tuple[Phase16AdmissionEnvelope, SignedAdmissionArtifact]:
         admission = self._hoare_client.admit(command, artifact_hash, policy_context)
         envelope = Phase16AdmissionEnvelope(command, artifact_hash, policy_digest, admission)
-        identity = ExecutionIdentity.from_governed_admission(
-            command, artifact_hash, policy_digest, admission
-        )
+        identity = ExecutionIdentity.from_governed_admission(command, artifact_hash, policy_digest, admission)
         artifact = sign_admission(identity, self._signer)
         return envelope, artifact
 
