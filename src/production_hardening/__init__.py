@@ -12,6 +12,13 @@ from .learned_world_model import (
     VideoFrame,
     action_feature_encoder,
 )
+from .learned_multimodal import (
+    EncodedMultimodalFusion,
+    LearnedMultimodalRepresentation,
+    ModalityEncoder,
+    LearnedMultimodalEncoder,
+    TensorModalityInput,
+)
 
 __all__ = [
     "ActionCondition",
@@ -32,4 +39,9 @@ __all__ = [
     "TensorWorldModelInput",
     "VideoFrame",
     "action_feature_encoder",
+    "EncodedMultimodalFusion",
+    "LearnedMultimodalRepresentation",
+    "ModalityEncoder",
+    "LearnedMultimodalEncoder",
+    "TensorModalityInput",
 ]
