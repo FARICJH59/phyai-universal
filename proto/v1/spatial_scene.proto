@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package phyai.v1;
+
+message SceneIdentity {
+  string tenant_id = 1;
+  string project_id = 2;
+  string scene_id = 3;
+  uint64 sequence = 4;
+  int64 observed_at_unix_nanos = 5;
+  string schema_version = 6;
+}
+
+message SpatialScene {
+  SceneIdentity identity = 1;
+  string reference_frame = 2;
+  bytes representation = 3;
+  string representation_encoding = 4;
+  double confidence = 5;
+  repeated string source_observation_ids = 6;
+  string provenance_uri = 7;
+}
