@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package phyai.v1;
+
+message ContractIdentity {
+  string tenant_id = 1;
+  string project_id = 2;
+  string source_id = 3;
+  string observation_id = 4;
+  uint64 sequence = 5;
+  int64 observed_at_unix_nanos = 6;
+  string schema_version = 7;
+}
+
+message SensorObservation {
+  ContractIdentity identity = 1;
+  string sensor_type = 2;
+  string frame_id = 3;
+  bytes payload = 4;
+  string payload_encoding = 5;
+  double confidence = 6;
+  string calibration_version = 7;
+  string provenance_uri = 8;
+}
