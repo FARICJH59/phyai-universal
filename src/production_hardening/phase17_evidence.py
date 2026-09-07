@@ -174,9 +174,10 @@ class EvidenceVerifier:
 
     def commit_verified_evidence(self, admission: SignedAdmissionArtifact, evidence: ExecutionEvidence, signer: AdmissionSigner, *, expected_device_id: str) -> DurableReceipt:
         self.verify_evidence(admission, evidence, signer, expected_device_id=expected_device_id)
-        return self.commit_receipt(evidence)
+        return self._commit_receipt(evidence)
 
-    def commit_receipt(self, evidence: ExecutionEvidence) -> DurableReceipt:
+    def _commit_receipt(self, evidence: ExecutionEvidence) -> DurableReceipt:
+        """Internal-only receipt commit; callers must enter through verified evidence."""
         receipt_digest = DurableReceipt.compute_digest(evidence.identity_digest, evidence.attempt_id, evidence.sequence, evidence.result_digest)
         receipt = DurableReceipt(evidence.identity_digest, evidence.attempt_id, evidence.sequence, evidence.result_digest, receipt_digest)
         if self._store.contains(receipt.receipt_digest):
