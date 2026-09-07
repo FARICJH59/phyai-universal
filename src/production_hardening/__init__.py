@@ -25,6 +25,7 @@ from .phase12_acceleration import (
     TensorRTExecutionResult,
     TimedCudaKernel,
 )
+from .phase13_latency import EndToEndLatencyHarness, EndToEndLatencyReport, LatencySample
 
 __all__ = [
     "ActionCondition",
@@ -54,4 +55,7 @@ __all__ = [
     "TensorRTExecutionResult",
     "TimedCudaKernel",
     "CudaExecutionResult",
+    "EndToEndLatencyHarness",
+    "EndToEndLatencyReport",
+    "LatencySample",
 ]
