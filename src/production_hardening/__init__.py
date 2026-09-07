@@ -4,6 +4,14 @@ from .world_model import ActionCondition, ActionConditionedReferenceWorldModel, 
 from .trajectory import AutoregressiveTrajectoryGenerator, Trajectory
 from .multimodal import ModalityInput, MultimodalFusion, UnifiedRepresentation
 from .robustness import MultimodalPerturbation, OutputSensitivity, SensorNoiseHarness, TrajectoryDeviation
+from .learned_world_model import (
+    EncodedLearnedWorldModelAdapter,
+    LearnedWorldModelRequest,
+    PyTorchTensorModel,
+    TensorWorldModelInput,
+    VideoFrame,
+    action_feature_encoder,
+)
 
 __all__ = [
     "ActionCondition",
@@ -18,4 +26,10 @@ __all__ = [
     "OutputSensitivity",
     "SensorNoiseHarness",
     "TrajectoryDeviation",
+    "EncodedLearnedWorldModelAdapter",
+    "LearnedWorldModelRequest",
+    "PyTorchTensorModel",
+    "TensorWorldModelInput",
+    "VideoFrame",
+    "action_feature_encoder",
 ]
