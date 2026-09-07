@@ -16,7 +16,7 @@ The eight PHyAI-Universal workload phases establish the domain pipeline. This la
 
 ## Inference optimization
 
-`production_hardening.export` provides a real PyTorch `torch.onnx.export` adapter. `production_hardening.inference_backends` provides an ONNX Runtime loader and latency benchmark. The ONNX benchmark now derives its input tensor from the model's declared name, shape, and element type, replacing the earlier fixed-size placeholder input. TensorRT is deliberately fail-explicit until a real TensorRT engine/device adapter is supplied. `production_hardening.cuda` defines the explicit custom-kernel boundary; it does not pretend Python execution is CUDA acceleration.
+`production_hardening.export` provides a real PyTorch `torch.onnx.export` adapter. `production_hardening.inference_backends` provides an ONNX Runtime loader and latency benchmark. The ONNX benchmark derives its input tensor from the model's declared name, shape, and element type. TensorRT is deliberately fail-explicit until a real TensorRT engine/device adapter is supplied. `production_hardening.cuda` defines the explicit custom-kernel boundary; it does not pretend Python execution is CUDA acceleration.
 
 ## Latency and hardware
 
@@ -24,7 +24,9 @@ The eight PHyAI-Universal workload phases establish the domain pipeline. This la
 
 ## Sim-to-real robustness
 
-`production_hardening.robustness` provides deterministic sensor perturbation cases. It is a harness for measuring model sensitivity; it does not claim physical robustness until real sensor captures and hardware-in-the-loop results are supplied.
+`production_hardening.robustness` now supports three measurable layers: byte-level perturbation detection, numeric output sensitivity, and trajectory deviation. Output sensitivity reports L2 delta, relative delta, and confidence degradation. Trajectory evaluation reports mean/max L2 deviation, sample count, and confidence degradation. `MultimodalPerturbation` allows a deterministic perturbation to be applied to a named RGB, depth, proprioception, tactile, or language modality while leaving other modality payloads unchanged.
+
+These are evaluation primitives, not claims of physical robustness. Real sensor captures, learned-model outputs, and hardware-in-the-loop runs are still required before making sim-to-real performance claims.
 
 ## HOARE boundary
 
@@ -44,5 +46,8 @@ The eight PHyAI-Universal workload phases establish the domain pipeline. This la
 | Custom CUDA kernels | Explicit compiled-kernel integration required |
 | Jetson deployment target | Defined |
 | 50 ms latency target | Benchmark target; not claimed achieved |
-| Sim-to-real/noise harness | Implemented |
+| Output sensitivity evaluation | Implemented |
+| Trajectory deviation evaluation | Implemented |
+| Multimodal perturbation harness | Implemented |
+| Physical sim-to-real robustness | Not yet claimed; HIL evidence required |
 | Physical execution governance | HOARE boundary defined |
