@@ -3,6 +3,7 @@
 from .world_model import ActionCondition, ActionConditionedReferenceWorldModel, WorldModelRequest
 from .trajectory import AutoregressiveTrajectoryGenerator, Trajectory
 from .multimodal import ModalityInput, MultimodalFusion, UnifiedRepresentation
+from .robustness import MultimodalPerturbation, OutputSensitivity, SensorNoiseHarness, TrajectoryDeviation
 
 __all__ = [
     "ActionCondition",
@@ -13,4 +14,8 @@ __all__ = [
     "ModalityInput",
     "MultimodalFusion",
     "UnifiedRepresentation",
+    "MultimodalPerturbation",
+    "OutputSensitivity",
+    "SensorNoiseHarness",
+    "TrajectoryDeviation",
 ]
