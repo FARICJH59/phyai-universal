@@ -1,0 +1,43 @@
+name: Phase Sequential Integrity
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/phase1_contracts/**'
+      - 'src/phase2_sensors/**'
+      - 'src/phase3_simulation/**'
+      - 'src/phase4_surrogates/**'
+      - 'src/phase5_perception/**'
+      - 'src/phase6_control/**'
+      - 'src/phase7_reasoning/**'
+      - 'src/phase8_evaluation/**'
+      - 'src/production_hardening/**'
+      - 'tests/integration/test_phase_sequential_integrity.py'
+      - '.github/workflows/phase-sequential-integrity.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/phase1_contracts/**'
+      - 'src/phase2_sensors/**'
+      - 'src/phase3_simulation/**'
+      - 'src/phase4_surrogates/**'
+      - 'src/phase5_perception/**'
+      - 'src/phase6_control/**'
+      - 'src/phase7_reasoning/**'
+      - 'src/phase8_evaluation/**'
+      - 'src/production_hardening/**'
+      - 'tests/integration/test_phase_sequential_integrity.py'
+      - '.github/workflows/phase-sequential-integrity.yml'
+
+jobs:
+  phase-sequential-integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install '.[test]'
+      - run: python -m pytest tests/integration/test_phase_sequential_integrity.py -q
