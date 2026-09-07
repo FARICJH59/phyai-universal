@@ -38,6 +38,13 @@ from .phase17_evidence import (
     sign_admission,
     verify_admission,
 )
+from .phase18_receipt_chain import (
+    InMemoryReceiptChainStore,
+    ReceiptChain,
+    ReceiptChainEntry,
+    ReceiptChainVerification,
+    ReceiptChainVerifier,
+)
 
 __all__ = [
     "ActionCondition",
@@ -80,7 +87,11 @@ __all__ = [
     "sign_admission",
     "verify_admission",
     "ExecutionEvidence",
-    "DurableReceipt",
     "EvidenceVerifier",
     "InMemoryEvidenceStore",
+    "ReceiptChainEntry",
+    "ReceiptChainVerification",
+    "ReceiptChainVerifier",
+    "ReceiptChain",
+    "InMemoryReceiptChainStore",
 ]
