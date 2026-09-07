@@ -16,11 +16,11 @@ The eight PHyAI-Universal workload phases establish the domain pipeline. This la
 
 ## Inference optimization
 
-`production_hardening.export` provides a real PyTorch `torch.onnx.export` adapter. `production_hardening.inference_backends` provides an ONNX Runtime loader and latency benchmark. TensorRT is deliberately fail-explicit until a real TensorRT engine/device adapter is supplied. `production_hardening.cuda` defines the explicit custom-kernel boundary; it does not pretend Python execution is CUDA acceleration.
+`production_hardening.export` provides a real PyTorch `torch.onnx.export` adapter. `production_hardening.inference_backends` provides an ONNX Runtime loader and latency benchmark. The ONNX benchmark now derives its input tensor from the model's declared name, shape, and element type, replacing the earlier fixed-size placeholder input. TensorRT is deliberately fail-explicit until a real TensorRT engine/device adapter is supplied. `production_hardening.cuda` defines the explicit custom-kernel boundary; it does not pretend Python execution is CUDA acceleration.
 
 ## Latency and hardware
 
-`configs/hardware/jetson.yaml` defines NVIDIA Jetson as a deployment target with TensorRT as the primary runtime and ONNX Runtime as fallback. The 50 ms requirement is a target, not a claimed result. `benchmark_backend` measures actual runtime latency on the machine/device used for the benchmark.
+`configs/hardware/jetson.yaml` defines NVIDIA Jetson as a deployment target with TensorRT as the primary runtime and ONNX Runtime as fallback. The 50 ms requirement is a target, not a claimed result. `benchmark_backend` measures actual runtime latency on the machine/device used for the benchmark. A real model must be supplied to the benchmark; the tool does not invent a compatible input shape.
 
 ## Sim-to-real robustness
 
@@ -39,7 +39,7 @@ The eight PHyAI-Universal workload phases establish the domain pipeline. This la
 | RGB/depth/proprioception/tactile/language fusion boundary | Implemented |
 | VGGT-compatible backend adapter | Implemented; real model injection required |
 | PyTorch → ONNX adapter | Implemented; PyTorch required |
-| ONNX Runtime adapter | Implemented; ONNX Runtime required |
+| ONNX Runtime adapter | Implemented; model-aware input construction |
 | TensorRT execution | Explicit device-runtime integration required |
 | Custom CUDA kernels | Explicit compiled-kernel integration required |
 | Jetson deployment target | Defined |
