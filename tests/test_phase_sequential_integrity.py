@@ -16,7 +16,7 @@ from src.phase5_perception.pipeline import PerceptionPipeline
 from src.phase6_control.controller import ControlPipeline
 from src.phase7_reasoning.reasoner import ReasoningPipeline
 from src.production_hardening.phase16_17_boundary import Phase16To17Boundary
-from src.production_hardening.phase16_hoare_integration import GovernedAdmission, GovernedExecutionRequest, GovernedHoareClient
+from src.production_hardening.phase16_hoare_integration import GovernedAdmission, GovernedExecutionRequest, GovernedHoareClient, TransportAdmission
 from src.production_hardening.phase17_evidence import EvidenceVerifier, ExecutionEvidence, HMACSHA256Signer, InMemoryEvidenceStore
 from src.production_hardening.phase18_receipt_chain import InMemoryReceiptChainStore, ReceiptChain, ReceiptChainVerifier
 
@@ -42,17 +42,31 @@ def _command(tenant: str = "tenant-a", project: str = "project-a") -> ControlCom
 
 
 class _AdmissionTransport:
-    def __init__(self, admission: GovernedAdmission) -> None:
-        self.admission = admission
+    def __init__(self, response: TransportAdmission) -> None:
+        self.response = response
         self.requests: list[GovernedExecutionRequest] = []
 
-    def admit(self, request: GovernedExecutionRequest) -> GovernedAdmission:
+    def admit(self, request: GovernedExecutionRequest) -> TransportAdmission:
         self.requests.append(request)
-        return self.admission
+        return self.response
 
 
 def _context(command: ControlCommand) -> dict[str, str]:
     return {"tenant_id": command.tenant_id, "project_id": command.project_id, "policy_digest": "policy-sha256"}
+
+
+def _transport_admission(command: ControlCommand, artifact_hash: str, context: dict[str, str], **overrides: object) -> TransportAdmission:
+    values: dict[str, object] = {
+        "accepted": True,
+        "attempt_id": command.attempt_id,
+        "capability_id": "cap-1",
+        "lease_id": "lease-1",
+        "fence_id": "fence-1",
+        "reason": "accepted",
+        "request_digest": GovernedHoareClient.digest_request(command, artifact_hash, context),
+    }
+    values.update(overrides)
+    return TransportAdmission(**values)
 
 
 def test_all_phases_have_explicit_boundaries() -> None:
@@ -106,17 +120,18 @@ def test_phases_16_to_18_are_strictly_sequential() -> None:
     command = _command()
     context = _context(command)
     artifact_hash = "artifact-sha256"
-    admission = GovernedAdmission.accepted_for(command, artifact_hash, context, "cap-1", "lease-1", "fence-1")
-    transport = _AdmissionTransport(admission)
+    response = _transport_admission(command, artifact_hash, context)
+    transport = _AdmissionTransport(response)
     client = GovernedHoareClient(transport)
     signer = HMACSHA256Signer("test-key", b"test-secret")
     verifier = EvidenceVerifier(InMemoryEvidenceStore())
     boundary = Phase16To17Boundary(client, signer, verifier)
 
     envelope, signed = boundary.admit_and_sign(command, artifact_hash, context, "policy-sha256")
-    assert signed.identity.capability_id == admission.capability_id
-    assert signed.identity.lease_id == admission.lease_id
-    assert signed.identity.fence_id == admission.fence_id
+    assert isinstance(envelope.admission, GovernedAdmission)
+    assert signed.identity.capability_id == "cap-1"
+    assert signed.identity.lease_id == "lease-1"
+    assert signed.identity.fence_id == "fence-1"
     assert transport.requests[0].request_digest == client.digest_request(command, artifact_hash, context)
 
     evidence = ExecutionEvidence(signed.identity_digest, command.attempt_id, "device-1", 1, 1, "result-sha256", signed.signature)
@@ -134,9 +149,10 @@ def test_fail_closed_on_rebinding_and_unverified_receipt_paths() -> None:
     context = _context(command)
     artifact_hash = "artifact-sha256"
     digest = GovernedHoareClient.digest_request(command, artifact_hash, context)
-    admission = GovernedAdmission(True, command.attempt_id, "cap-1", "lease-1", "fence-1", "accepted", digest)
+
     with pytest.raises(ValueError, match="attempt identity"):
-        GovernedHoareClient(_AdmissionTransport(GovernedAdmission(True, uuid4(), "cap-1", "lease-1", "fence-1", "accepted", digest))).admit(command, artifact_hash, context)
+        response = _transport_admission(command, artifact_hash, context, attempt_id=uuid4())
+        GovernedHoareClient(_AdmissionTransport(response)).admit(command, artifact_hash, context)
 
     with pytest.raises(PermissionError, match="must originate from verified evidence"):
         from src.production_hardening.phase17_evidence import DurableReceipt
@@ -144,4 +160,7 @@ def test_fail_closed_on_rebinding_and_unverified_receipt_paths() -> None:
         DurableReceipt("identity", command.attempt_id, 1, "result", receipt_digest)
 
     with pytest.raises(ValueError, match="request binding"):
-        GovernedHoareClient(_AdmissionTransport(GovernedAdmission(True, command.attempt_id, "cap-1", "lease-1", "fence-1", "accepted", "wrong"))).admit(command, artifact_hash, context)
+        response = _transport_admission(command, artifact_hash, context, request_digest="wrong")
+        GovernedHoareClient(_AdmissionTransport(response)).admit(command, artifact_hash, context)
+
+    assert digest == GovernedHoareClient.digest_request(command, artifact_hash, context)
