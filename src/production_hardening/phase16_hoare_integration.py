@@ -28,7 +28,9 @@ class GovernedExecutionRequest:
 
 
 @dataclass(frozen=True, slots=True)
-class GovernedAdmission:
+class TransportAdmission:
+    """Untrusted response crossing the HOARE transport boundary."""
+
     accepted: bool
     attempt_id: UUID
     capability_id: str | None
@@ -37,43 +39,53 @@ class GovernedAdmission:
     reason: str
     request_digest: str = ""
 
-    def __post_init__(self) -> None:
-        if not self.reason.strip():
-            raise ValueError("admission reason is required")
-        if self.accepted and not all((self.capability_id, self.lease_id, self.fence_id)):
-            raise ValueError("accepted admission requires capability, lease, and fence")
-        if not self.accepted and any((self.capability_id, self.lease_id, self.fence_id)):
-            raise ValueError("denied admission cannot carry execution authority")
-        if self.accepted and not self.request_digest.strip():
-            raise ValueError("accepted admission requires request digest")
+
+@dataclass(frozen=True, slots=True, init=False)
+class GovernedAdmission:
+    """Sealed Phase-16 authority; callers cannot construct it directly."""
+
+    accepted: bool
+    attempt_id: UUID
+    capability_id: str | None
+    lease_id: str | None
+    fence_id: str | None
+    reason: str
+    request_digest: str
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        raise PermissionError("governed admission can only originate from HOARE transport")
 
     @classmethod
-    def accepted_for(
-        cls,
-        command: ControlCommand,
-        artifact_hash: str,
-        policy_context: Mapping[str, str],
-        capability_id: str,
-        lease_id: str,
-        fence_id: str,
-        reason: str = "admitted",
-    ) -> "GovernedAdmission":
-        return cls(True, command.attempt_id, capability_id, lease_id, fence_id, reason, GovernedHoareClient.digest_request(command, artifact_hash, policy_context))
+    def _from_transport(cls, response: TransportAdmission, request_digest: str) -> "GovernedAdmission":
+        if response.accepted and response.request_digest != request_digest:
+            raise ValueError("HOARE admission request binding mismatch")
+        if not response.reason.strip():
+            raise ValueError("admission reason is required")
+        if response.accepted and not all((response.capability_id, response.lease_id, response.fence_id)):
+            raise ValueError("accepted admission requires capability, lease, and fence")
+        if not response.accepted and any((response.capability_id, response.lease_id, response.fence_id)):
+            raise ValueError("denied admission cannot carry execution authority")
+        if response.accepted and not response.request_digest.strip():
+            raise ValueError("accepted admission requires request digest")
+        instance = object.__new__(cls)
+        object.__setattr__(instance, "accepted", response.accepted)
+        object.__setattr__(instance, "attempt_id", response.attempt_id)
+        object.__setattr__(instance, "capability_id", response.capability_id)
+        object.__setattr__(instance, "lease_id", response.lease_id)
+        object.__setattr__(instance, "fence_id", response.fence_id)
+        object.__setattr__(instance, "reason", response.reason)
+        object.__setattr__(instance, "request_digest", response.request_digest)
+        return instance
 
 
 class HoareGovernanceTransport(Protocol):
     """Real transport boundary to an external HOARE/AEGIS/TCX deployment."""
 
-    def admit(self, request: GovernedExecutionRequest) -> GovernedAdmission: ...
+    def admit(self, request: GovernedExecutionRequest) -> TransportAdmission: ...
 
 
 class GovernedHoareClient:
-    """PHyAI client for the governed execution contract.
-
-    This client never creates authority locally. Capability, lease, and fence
-    identifiers are accepted only when returned by the configured HOARE
-    transport after admission.
-    """
+    """PHyAI client for the governed execution contract."""
 
     def __init__(self, transport: HoareGovernanceTransport) -> None:
         self._transport = transport
@@ -115,9 +127,7 @@ class GovernedHoareClient:
     ) -> GovernedAdmission:
         request_digest = self.digest_request(command, artifact_hash, policy_context)
         request = GovernedExecutionRequest(command, artifact_hash, policy_context, request_digest)
-        admission = self._transport.admit(request)
-        if admission.attempt_id != command.attempt_id:
+        response = self._transport.admit(request)
+        if response.attempt_id != command.attempt_id:
             raise ValueError("HOARE admission attempt identity mismatch")
-        if admission.accepted and admission.request_digest != request_digest:
-            raise ValueError("HOARE admission request binding mismatch")
-        return admission
+        return GovernedAdmission._from_transport(response, request_digest)

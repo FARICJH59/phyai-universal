@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping, Protocol, Sequence
 
+from src.production_hardening.phase16_hoare_integration import GovernedAdmission
+
 
 @dataclass(frozen=True, slots=True)
 class HardwareObservation:
@@ -59,23 +61,15 @@ class PhysicalActuator(Protocol):
     def apply(self, request: ActuationRequest) -> ExecutionEvidence: ...
 
 
-class GovernedExecutionAuthority(Protocol):
-    """Minimal authority proof supplied by the Phase 16 governance boundary."""
-
-    accepted: bool
-    attempt_id: object
-    capability_id: str | None
-    lease_id: str | None
-    fence_id: str | None
-
-
 class HardwareInLoopBoundary:
-    """Physical I/O adapter that requires Phase 16-style authority before actuation."""
+    """Physical I/O boundary that accepts only sealed Phase-16 authority."""
 
     def __init__(self, actuator: PhysicalActuator) -> None:
         self._actuator = actuator
 
-    def execute(self, request: ActuationRequest, authority: GovernedExecutionAuthority) -> ExecutionEvidence:
+    def execute(self, request: ActuationRequest, authority: GovernedAdmission) -> ExecutionEvidence:
+        if not isinstance(authority, GovernedAdmission):
+            raise PermissionError("physical actuation requires Phase 16 governed admission")
         if not authority.accepted:
             raise PermissionError("HOARE admission denied; physical actuation blocked")
         if str(authority.attempt_id) != request.attempt_id:

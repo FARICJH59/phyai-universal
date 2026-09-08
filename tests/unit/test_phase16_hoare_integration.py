@@ -6,6 +6,7 @@ from src.phase1_contracts.contracts import ControlCommand
 from src.production_hardening.phase16_hoare_integration import (
     GovernedAdmission,
     GovernedHoareClient,
+    TransportAdmission,
 )
 
 
@@ -33,32 +34,54 @@ def context():
     return {"tenant_id": "tenant-a", "project_id": "project-a", "policy_digest": "policy-1"}
 
 
+def transport_admission(cmd, artifact="artifact", ctx=None, **overrides):
+    ctx = ctx or context()
+    values = {
+        "accepted": True,
+        "attempt_id": cmd.attempt_id,
+        "capability_id": "cap-1",
+        "lease_id": "lease-1",
+        "fence_id": "fence-1",
+        "reason": "admitted",
+        "request_digest": GovernedHoareClient.digest_request(cmd, artifact, ctx),
+    }
+    values.update(overrides)
+    return TransportAdmission(**values)
+
+
 def test_admission_requires_authority_returned_by_hoare():
     cmd = command()
     ctx = context()
-    admission = GovernedAdmission.accepted_for(cmd, "artifact", ctx, "cap-1", "lease-1", "fence-1")
-    transport = FakeTransport(admission)
+    transport = FakeTransport(transport_admission(cmd, ctx=ctx))
     result = GovernedHoareClient(transport).admit(cmd, "artifact", ctx)
+    assert isinstance(result, GovernedAdmission)
     assert result.accepted
     assert transport.requests[0].request_digest == GovernedHoareClient.digest_request(cmd, "artifact", ctx)
+
+
+def test_local_governed_admission_constructor_is_sealed():
+    cmd = command()
+    with pytest.raises(PermissionError, match="only originate from HOARE transport"):
+        GovernedAdmission(True, cmd.attempt_id, "cap-1", "lease-1", "fence-1", "admitted", "digest")
 
 
 def test_accepted_admission_with_wrong_request_binding_fails_closed():
     cmd = command()
     ctx = context()
-    admission = GovernedAdmission(True, cmd.attempt_id, "cap-1", "lease-1", "fence-1", "admitted", "wrong-digest")
+    admission = transport_admission(cmd, ctx=ctx, request_digest="wrong-digest")
     with pytest.raises(ValueError, match="request binding"):
         GovernedHoareClient(FakeTransport(admission)).admit(cmd, "artifact", ctx)
 
 
 def test_denial_carries_no_authority():
     cmd = command()
-    assert not GovernedHoareClient(FakeTransport(GovernedAdmission(False, cmd.attempt_id, None, None, None, "denied"))).admit(cmd, "artifact", context()).accepted
+    denied = TransportAdmission(False, cmd.attempt_id, None, None, None, "denied")
+    assert not GovernedHoareClient(FakeTransport(denied)).admit(cmd, "artifact", context()).accepted
 
 
 def test_cross_tenant_fails_before_transport():
     cmd = command()
-    transport = FakeTransport(GovernedAdmission(False, cmd.attempt_id, None, None, None, "denied"))
+    transport = FakeTransport(TransportAdmission(False, cmd.attempt_id, None, None, None, "denied"))
     with pytest.raises(PermissionError, match="tenant mismatch"):
         GovernedHoareClient(transport).admit(cmd, "artifact", {"tenant_id": "other", "project_id": "project-a"})
     assert not transport.requests
@@ -67,15 +90,16 @@ def test_cross_tenant_fails_before_transport():
 def test_attempt_identity_cannot_be_rebound():
     cmd = command()
     ctx = context()
-    admission = GovernedAdmission(True, uuid4(), "cap-1", "lease-1", "fence-1", "admitted", GovernedHoareClient.digest_request(cmd, "artifact", ctx))
+    admission = transport_admission(cmd, ctx=ctx, attempt_id=uuid4())
     with pytest.raises(ValueError, match="attempt identity"):
         GovernedHoareClient(FakeTransport(admission)).admit(cmd, "artifact", ctx)
 
 
-def test_denied_admission_cannot_include_authority():
+def test_denied_transport_response_cannot_include_authority():
     cmd = command()
+    denied = TransportAdmission(False, cmd.attempt_id, "cap-1", None, None, "denied")
     with pytest.raises(ValueError, match="denied admission"):
-        GovernedAdmission(False, cmd.attempt_id, "cap-1", None, None, "denied")
+        GovernedHoareClient(FakeTransport(denied)).admit(cmd, "artifact", context())
 
 
 def test_request_digest_changes_with_security_relevant_context():

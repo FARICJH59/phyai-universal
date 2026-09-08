@@ -1,5 +1,8 @@
+from uuid import uuid4
+
 import pytest
 
+from src.phase1_contracts.contracts import ControlCommand
 from src.production_hardening.phase15_hil import (
     ActuationRequest,
     ExecutionEvidence,
@@ -7,15 +10,35 @@ from src.production_hardening.phase15_hil import (
     HardwareObservation,
     validate_sensor_sequence,
 )
+from src.production_hardening.phase16_hoare_integration import GovernedHoareClient, TransportAdmission
 
 
-class Authority:
-    def __init__(self, accepted=True, attempt_id="attempt-1", complete=True):
-        self.accepted = accepted
-        self.attempt_id = attempt_id
-        self.capability_id = "cap-1" if complete else None
-        self.lease_id = "lease-1" if complete else None
-        self.fence_id = "fence-1" if complete else None
+class FakeTransport:
+    def __init__(self, admission):
+        self.admission = admission
+
+    def admit(self, request):
+        return self.admission
+
+
+def command():
+    return ControlCommand(
+        tenant_id="tenant", project_id="project", command_id=uuid4(), attempt_id=uuid4(),
+        sequence=1, proposed_at=__import__('datetime').datetime.now(__import__('datetime').timezone.utc),
+        target_id="robot-1", command_type="position", parameters={"velocity": 1.0}, confidence=0.95,
+        safety_precondition_ids=("safe-1",), scene_id=uuid4(), source_observation_ids=(uuid4(),),
+        provenance_uri="urn:test", schema_version="v1",
+    )
+
+
+def context():
+    return {"tenant_id": "tenant", "project_id": "project", "policy_digest": "policy-1"}
+
+
+def governed_authority(cmd):
+    digest = GovernedHoareClient.digest_request(cmd, "artifact", context())
+    response = TransportAdmission(True, cmd.attempt_id, "cap-1", "lease-1", "fence-1", "admitted", digest)
+    return GovernedHoareClient(FakeTransport(response)).admit(cmd, "artifact", context())
 
 
 class Actuator:
@@ -28,42 +51,55 @@ class Actuator:
         return ExecutionEvidence(request.attempt_id, request.device_id, 1, "digest", self.verified)
 
 
-def request():
-    return ActuationRequest("tenant", "project", "robot-1", "attempt-1", "command-digest", {"velocity": 1.0})
+def request(cmd):
+    return ActuationRequest(cmd.tenant_id, cmd.project_id, "robot-1", str(cmd.attempt_id), "command-digest", {"velocity": 1.0})
 
 
-def test_hil_requires_governed_admission():
+def test_hil_rejects_fabricated_structural_authority():
     actuator = Actuator()
-    with pytest.raises(PermissionError, match="admission denied"):
-        HardwareInLoopBoundary(actuator).execute(request(), Authority(False))
+    fabricated = type("Authority", (), {
+        "accepted": True, "attempt_id": "attempt", "capability_id": "cap-1",
+        "lease_id": "lease-1", "fence_id": "fence-1",
+    })()
+    cmd = command()
+    req = request(cmd)
+    with pytest.raises(PermissionError, match="requires Phase 16"):
+        HardwareInLoopBoundary(actuator).execute(req, fabricated)
     assert actuator.calls == 0
 
 
-def test_hil_requires_complete_governed_authority():
+def test_hil_accepts_only_phase16_governed_admission():
+    cmd = command()
     actuator = Actuator()
-    with pytest.raises(PermissionError, match="authority is incomplete"):
-        HardwareInLoopBoundary(actuator).execute(request(), Authority(True, complete=False))
+    evidence = HardwareInLoopBoundary(actuator).execute(request(cmd), governed_authority(cmd))
+    assert evidence.verified
+    assert evidence.attempt_id == str(cmd.attempt_id)
+    assert actuator.calls == 1
+
+
+def test_hil_rejects_denied_phase16_admission():
+    cmd = command()
+    denied = TransportAdmission(False, cmd.attempt_id, None, None, None, "denied")
+    authority = GovernedHoareClient(FakeTransport(denied)).admit(cmd, "artifact", context())
+    actuator = Actuator()
+    with pytest.raises(PermissionError, match="admission denied"):
+        HardwareInLoopBoundary(actuator).execute(request(cmd), authority)
     assert actuator.calls == 0
 
 
 def test_hil_binds_attempt_to_governed_authority():
+    cmd = command()
     actuator = Actuator()
+    req = ActuationRequest(cmd.tenant_id, cmd.project_id, "robot-1", str(uuid4()), "command-digest", {"velocity": 1.0})
     with pytest.raises(ValueError, match="attempt identity"):
-        HardwareInLoopBoundary(actuator).execute(request(), Authority(True, attempt_id="other-attempt"))
+        HardwareInLoopBoundary(actuator).execute(req, governed_authority(cmd))
     assert actuator.calls == 0
 
 
-def test_hil_accepts_verified_execution_after_governed_admission():
-    actuator = Actuator()
-    evidence = HardwareInLoopBoundary(actuator).execute(request(), Authority(True))
-    assert evidence.verified
-    assert evidence.attempt_id == "attempt-1"
-    assert actuator.calls == 1
-
-
 def test_hil_rejects_unverified_evidence():
+    cmd = command()
     with pytest.raises(RuntimeError, match="evidence failed verification"):
-        HardwareInLoopBoundary(Actuator(False)).execute(request(), Authority(True))
+        HardwareInLoopBoundary(Actuator(False)).execute(request(cmd), governed_authority(cmd))
 
 
 def test_sensor_sequence_preserves_tenant_project_and_order():
