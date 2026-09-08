@@ -5,7 +5,7 @@ import pytest
 
 from src.phase1_contracts.contracts import ControlCommand
 from src.production_hardening.phase16_17_boundary import Phase16To17Boundary, boundary_digest
-from src.production_hardening.phase16_hoare_integration import GovernedAdmission, GovernedHoareClient
+from src.production_hardening.phase16_hoare_integration import GovernedAdmission, GovernedHoareClient, TransportAdmission
 from src.production_hardening.phase17_evidence import ExecutionEvidence, EvidenceVerifier, HMACSHA256Signer, InMemoryEvidenceStore
 
 
@@ -31,7 +31,10 @@ def context():
 
 
 def admitted(cmd):
-    return GovernedAdmission.accepted_for(cmd, "artifact", context(), "cap-1", "lease-1", "fence-1")
+    ctx = context()
+    digest = GovernedHoareClient.digest_request(cmd, "artifact", ctx)
+    response = TransportAdmission(True, cmd.attempt_id, "cap-1", "lease-1", "fence-1", "admitted", digest)
+    return GovernedHoareClient(FakeTransport(response)).admit(cmd, "artifact", ctx)
 
 
 def test_boundary_only_signs_accepted_phase16_admission():
@@ -48,7 +51,7 @@ def test_boundary_only_signs_accepted_phase16_admission():
 
 def test_denied_admission_cannot_cross_boundary():
     cmd = command()
-    admission = GovernedAdmission(False, cmd.attempt_id, None, None, None, "denied")
+    admission = TransportAdmission(False, cmd.attempt_id, None, None, None, "denied")
     boundary = Phase16To17Boundary(GovernedHoareClient(FakeTransport(admission)), HMACSHA256Signer("key-1", b"secret"), EvidenceVerifier(InMemoryEvidenceStore()))
     with pytest.raises(PermissionError, match="denied admission"):
         boundary.admit_and_sign(cmd, "artifact", context(), "policy")
@@ -79,3 +82,9 @@ def test_boundary_digest_is_stable_for_same_handoff():
     boundary = Phase16To17Boundary(GovernedHoareClient(FakeTransport(admission)), HMACSHA256Signer("key-1", b"secret"), EvidenceVerifier(InMemoryEvidenceStore()))
     envelope, signed = boundary.admit_and_sign(cmd, "artifact", context(), "policy")
     assert boundary_digest(envelope, signed) == boundary_digest(envelope, signed)
+
+
+def test_local_governed_admission_constructor_is_sealed():
+    cmd = command()
+    with pytest.raises(PermissionError, match="only originate from HOARE transport"):
+        GovernedAdmission(True, cmd.attempt_id, "cap-1", "lease-1", "fence-1", "admitted", "digest")
