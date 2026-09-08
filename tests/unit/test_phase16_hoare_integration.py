@@ -29,19 +29,31 @@ def command():
     )
 
 
+def context():
+    return {"tenant_id": "tenant-a", "project_id": "project-a", "policy_digest": "policy-1"}
+
+
 def test_admission_requires_authority_returned_by_hoare():
     cmd = command()
-    admission = GovernedAdmission(True, cmd.attempt_id, "cap-1", "lease-1", "fence-1", "admitted")
+    ctx = context()
+    admission = GovernedAdmission.accepted_for(cmd, "artifact", ctx, "cap-1", "lease-1", "fence-1")
     transport = FakeTransport(admission)
-    result = GovernedHoareClient(transport).admit(cmd, "artifact", {"tenant_id": "tenant-a", "project_id": "project-a"})
+    result = GovernedHoareClient(transport).admit(cmd, "artifact", ctx)
     assert result.accepted
-    assert transport.requests[0].request_digest == GovernedHoareClient.digest_request(cmd, "artifact")
+    assert transport.requests[0].request_digest == GovernedHoareClient.digest_request(cmd, "artifact", ctx)
+
+
+def test_accepted_admission_with_wrong_request_binding_fails_closed():
+    cmd = command()
+    ctx = context()
+    admission = GovernedAdmission(True, cmd.attempt_id, "cap-1", "lease-1", "fence-1", "admitted", "wrong-digest")
+    with pytest.raises(ValueError, match="request binding"):
+        GovernedHoareClient(FakeTransport(admission)).admit(cmd, "artifact", ctx)
 
 
 def test_denial_carries_no_authority():
     cmd = command()
-    admission = GovernedAdmission(False, cmd.attempt_id, None, None, None, "denied")
-    assert not GovernedHoareClient(FakeTransport(admission)).admit(cmd, "artifact", {"tenant_id": "tenant-a", "project_id": "project-a"}).accepted
+    assert not GovernedHoareClient(FakeTransport(GovernedAdmission(False, cmd.attempt_id, None, None, None, "denied"))).admit(cmd, "artifact", context()).accepted
 
 
 def test_cross_tenant_fails_before_transport():
@@ -54,12 +66,29 @@ def test_cross_tenant_fails_before_transport():
 
 def test_attempt_identity_cannot_be_rebound():
     cmd = command()
-    admission = GovernedAdmission(True, uuid4(), "cap-1", "lease-1", "fence-1", "admitted")
+    ctx = context()
+    admission = GovernedAdmission(True, uuid4(), "cap-1", "lease-1", "fence-1", "admitted", GovernedHoareClient.digest_request(cmd, "artifact", ctx))
     with pytest.raises(ValueError, match="attempt identity"):
-        GovernedHoareClient(FakeTransport(admission)).admit(cmd, "artifact", {"tenant_id": "tenant-a", "project_id": "project-a"})
+        GovernedHoareClient(FakeTransport(admission)).admit(cmd, "artifact", ctx)
 
 
 def test_denied_admission_cannot_include_authority():
     cmd = command()
     with pytest.raises(ValueError, match="denied admission"):
         GovernedAdmission(False, cmd.attempt_id, "cap-1", None, None, "denied")
+
+
+def test_request_digest_changes_with_security_relevant_context():
+    cmd = command()
+    ctx = context()
+    baseline = GovernedHoareClient.digest_request(cmd, "artifact", ctx)
+    changed_parameters = cmd.__class__(
+        tenant_id=cmd.tenant_id, project_id=cmd.project_id, command_id=cmd.command_id, attempt_id=cmd.attempt_id,
+        sequence=cmd.sequence, proposed_at=cmd.proposed_at, target_id=cmd.target_id, command_type=cmd.command_type,
+        parameters={"x": 0.2}, confidence=cmd.confidence, safety_precondition_ids=cmd.safety_precondition_ids,
+        scene_id=cmd.scene_id, source_observation_ids=cmd.source_observation_ids, provenance_uri=cmd.provenance_uri,
+        schema_version=cmd.schema_version,
+    )
+    changed_context = {**ctx, "policy_digest": "policy-2"}
+    assert baseline != GovernedHoareClient.digest_request(changed_parameters, "artifact", ctx)
+    assert baseline != GovernedHoareClient.digest_request(cmd, "artifact", changed_context)
