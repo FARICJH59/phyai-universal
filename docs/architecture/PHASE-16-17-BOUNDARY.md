@@ -11,7 +11,7 @@ Phase 16: GovernedHoareClient
     ↓
 HOARE / AEGIS / TCX transport
     ↓
-GovernedAdmission
+GovernedAdmission (request_digest bound)
     ↓
 Phase16AdmissionEnvelope
     ↓
@@ -29,6 +29,23 @@ DurableReceipt
     ↓
 Phase 18 receipt chain
 ```
+
+## Admission request binding
+
+The Phase 16 request digest canonically binds the complete security-relevant execution request, including:
+
+- tenant and project identity;
+- command and attempt identity;
+- sequence and proposal timestamp;
+- target and command type;
+- command parameters;
+- confidence and safety preconditions;
+- scene and source-observation lineage;
+- provenance URI and schema version;
+- artifact hash;
+- complete policy/security context.
+
+An accepted `GovernedAdmission` must carry the exact request digest returned for the request. A transport response with a mismatched or missing binding is rejected before authority crosses the Phase 16 boundary.
 
 ## Boundary invariants
 
