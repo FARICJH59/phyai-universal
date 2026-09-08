@@ -27,15 +27,19 @@ def command():
     )
 
 
+def context():
+    return {"tenant_id": "tenant-a", "project_id": "project-a"}
+
+
+def admitted(cmd):
+    return GovernedAdmission.accepted_for(cmd, "artifact", context(), "cap-1", "lease-1", "fence-1")
+
+
 def test_boundary_only_signs_accepted_phase16_admission():
     cmd = command()
-    admission = GovernedAdmission(True, cmd.attempt_id, "cap-1", "lease-1", "fence-1", "admitted")
-    boundary = Phase16To17Boundary(
-        GovernedHoareClient(FakeTransport(admission)),
-        HMACSHA256Signer("key-1", b"secret"),
-        EvidenceVerifier(InMemoryEvidenceStore()),
-    )
-    envelope, signed = boundary.admit_and_sign(cmd, "artifact", {"tenant_id": "tenant-a", "project_id": "project-a"}, "policy")
+    admission = admitted(cmd)
+    boundary = Phase16To17Boundary(GovernedHoareClient(FakeTransport(admission)), HMACSHA256Signer("key-1", b"secret"), EvidenceVerifier(InMemoryEvidenceStore()))
+    envelope, signed = boundary.admit_and_sign(cmd, "artifact", context(), "policy")
     assert envelope.admission is admission
     assert signed.identity.attempt_id == cmd.attempt_id
     assert signed.identity.capability_id == "cap-1"
@@ -46,24 +50,16 @@ def test_boundary_only_signs_accepted_phase16_admission():
 def test_denied_admission_cannot_cross_boundary():
     cmd = command()
     admission = GovernedAdmission(False, cmd.attempt_id, None, None, None, "denied")
-    boundary = Phase16To17Boundary(
-        GovernedHoareClient(FakeTransport(admission)),
-        HMACSHA256Signer("key-1", b"secret"),
-        EvidenceVerifier(InMemoryEvidenceStore()),
-    )
+    boundary = Phase16To17Boundary(GovernedHoareClient(FakeTransport(admission)), HMACSHA256Signer("key-1", b"secret"), EvidenceVerifier(InMemoryEvidenceStore()))
     with pytest.raises(PermissionError, match="denied admission"):
-        boundary.admit_and_sign(cmd, "artifact", {"tenant_id": "tenant-a", "project_id": "project-a"}, "policy")
+        boundary.admit_and_sign(cmd, "artifact", context(), "policy")
 
 
 def test_boundary_rejects_artifact_or_policy_rebinding():
     cmd = command()
-    admission = GovernedAdmission(True, cmd.attempt_id, "cap-1", "lease-1", "fence-1", "admitted")
-    boundary = Phase16To17Boundary(
-        GovernedHoareClient(FakeTransport(admission)),
-        HMACSHA256Signer("key-1", b"secret"),
-        EvidenceVerifier(InMemoryEvidenceStore()),
-    )
-    envelope, signed = boundary.admit_and_sign(cmd, "artifact", {"tenant_id": "tenant-a", "project_id": "project-a"}, "policy")
+    admission = admitted(cmd)
+    boundary = Phase16To17Boundary(GovernedHoareClient(FakeTransport(admission)), HMACSHA256Signer("key-1", b"secret"), EvidenceVerifier(InMemoryEvidenceStore()))
+    envelope, signed = boundary.admit_and_sign(cmd, "artifact", context(), "policy")
     evidence = ExecutionEvidence(signed.identity_digest, cmd.attempt_id, "device-1", 1, 10, "result", signed.signature)
     object.__setattr__(envelope, "artifact_hash", "different")
     with pytest.raises(ValueError, match="artifact mismatch"):
@@ -72,11 +68,7 @@ def test_boundary_rejects_artifact_or_policy_rebinding():
 
 def test_boundary_digest_is_stable_for_same_handoff():
     cmd = command()
-    admission = GovernedAdmission(True, cmd.attempt_id, "cap-1", "lease-1", "fence-1", "admitted")
-    boundary = Phase16To17Boundary(
-        GovernedHoareClient(FakeTransport(admission)),
-        HMACSHA256Signer("key-1", b"secret"),
-        EvidenceVerifier(InMemoryEvidenceStore()),
-    )
-    envelope, signed = boundary.admit_and_sign(cmd, "artifact", {"tenant_id": "tenant-a", "project_id": "project-a"}, "policy")
+    admission = admitted(cmd)
+    boundary = Phase16To17Boundary(GovernedHoareClient(FakeTransport(admission)), HMACSHA256Signer("key-1", b"secret"), EvidenceVerifier(InMemoryEvidenceStore()))
+    envelope, signed = boundary.admit_and_sign(cmd, "artifact", context(), "policy")
     assert boundary_digest(envelope, signed) == boundary_digest(envelope, signed)
