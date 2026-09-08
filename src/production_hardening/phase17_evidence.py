@@ -10,9 +10,13 @@ from src.phase1_contracts.contracts import ControlCommand
 from src.production_hardening.phase16_hoare_integration import GovernedAdmission
 
 
-@dataclass(frozen=True, slots=True)
+_IDENTITY_FACTORY_TOKEN = object()
+_RECEIPT_FACTORY_TOKEN = object()
+
+
+@dataclass(frozen=True, slots=True, init=False)
 class ExecutionIdentity:
-    """Immutable identity binding for one governed execution attempt."""
+    """Immutable identity binding created only from governed admission."""
 
     tenant_id: str
     project_id: str
@@ -24,10 +28,34 @@ class ExecutionIdentity:
     fence_id: str
     policy_digest: str
 
-    def __post_init__(self) -> None:
-        for name, value in (("tenant_id", self.tenant_id), ("project_id", self.project_id), ("artifact_hash", self.artifact_hash), ("capability_id", self.capability_id), ("lease_id", self.lease_id), ("fence_id", self.fence_id), ("policy_digest", self.policy_digest)):
+    def __init__(
+        self,
+        tenant_id: str,
+        project_id: str,
+        command_id: UUID,
+        attempt_id: UUID,
+        artifact_hash: str,
+        capability_id: str,
+        lease_id: str,
+        fence_id: str,
+        policy_digest: str,
+        *,
+        _provenance_token: object | None = None,
+    ) -> None:
+        if _provenance_token is not _IDENTITY_FACTORY_TOKEN:
+            raise PermissionError("execution identity must originate from governed admission")
+        for name, value in (("tenant_id", tenant_id), ("project_id", project_id), ("artifact_hash", artifact_hash), ("capability_id", capability_id), ("lease_id", lease_id), ("fence_id", fence_id), ("policy_digest", policy_digest)):
             if not value.strip():
                 raise ValueError(f"{name} is required")
+        object.__setattr__(self, "tenant_id", tenant_id)
+        object.__setattr__(self, "project_id", project_id)
+        object.__setattr__(self, "command_id", command_id)
+        object.__setattr__(self, "attempt_id", attempt_id)
+        object.__setattr__(self, "artifact_hash", artifact_hash)
+        object.__setattr__(self, "capability_id", capability_id)
+        object.__setattr__(self, "lease_id", lease_id)
+        object.__setattr__(self, "fence_id", fence_id)
+        object.__setattr__(self, "policy_digest", policy_digest)
 
     def canonical(self) -> str:
         return "|".join((self.tenant_id, self.project_id, str(self.command_id), str(self.attempt_id), self.artifact_hash, self.capability_id, self.lease_id, self.fence_id, self.policy_digest))
@@ -43,7 +71,9 @@ class ExecutionIdentity:
             raise ValueError("governed admission attempt identity mismatch")
         if not admission.capability_id or not admission.lease_id or not admission.fence_id:
             raise ValueError("accepted admission is missing authority")
-        return cls(command.tenant_id, command.project_id, command.command_id, admission.attempt_id, artifact_hash, admission.capability_id, admission.lease_id, admission.fence_id, policy_digest)
+        if not admission.request_digest.strip():
+            raise ValueError("accepted admission is missing request binding")
+        return cls(command.tenant_id, command.project_id, command.command_id, admission.attempt_id, artifact_hash, admission.capability_id, admission.lease_id, admission.fence_id, policy_digest, _provenance_token=_IDENTITY_FACTORY_TOKEN)
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,7 +148,7 @@ class ExecutionEvidence:
             raise ValueError("sequence and timestamp_ns must be nonnegative")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class DurableReceipt:
     identity_digest: str
     attempt_id: UUID
@@ -126,9 +156,16 @@ class DurableReceipt:
     result_digest: str
     receipt_digest: str
 
-    def __post_init__(self) -> None:
-        if self.receipt_digest != self.compute_digest(self.identity_digest, self.attempt_id, self.sequence, self.result_digest):
+    def __init__(self, identity_digest: str, attempt_id: UUID, sequence: int, result_digest: str, receipt_digest: str, *, _provenance_token: object | None = None) -> None:
+        if _provenance_token is not _RECEIPT_FACTORY_TOKEN:
+            raise PermissionError("durable receipt must originate from verified evidence")
+        if receipt_digest != self.compute_digest(identity_digest, attempt_id, sequence, result_digest):
             raise ValueError("receipt digest mismatch")
+        object.__setattr__(self, "identity_digest", identity_digest)
+        object.__setattr__(self, "attempt_id", attempt_id)
+        object.__setattr__(self, "sequence", sequence)
+        object.__setattr__(self, "result_digest", result_digest)
+        object.__setattr__(self, "receipt_digest", receipt_digest)
 
     @staticmethod
     def compute_digest(identity_digest: str, attempt_id: UUID, sequence: int, result_digest: str) -> str:
@@ -177,9 +214,8 @@ class EvidenceVerifier:
         return self._commit_receipt(evidence)
 
     def _commit_receipt(self, evidence: ExecutionEvidence) -> DurableReceipt:
-        """Internal-only receipt commit; callers must enter through verified evidence."""
         receipt_digest = DurableReceipt.compute_digest(evidence.identity_digest, evidence.attempt_id, evidence.sequence, evidence.result_digest)
-        receipt = DurableReceipt(evidence.identity_digest, evidence.attempt_id, evidence.sequence, evidence.result_digest, receipt_digest)
+        receipt = DurableReceipt(evidence.identity_digest, evidence.attempt_id, evidence.sequence, evidence.result_digest, receipt_digest, _provenance_token=_RECEIPT_FACTORY_TOKEN)
         if self._store.contains(receipt.receipt_digest):
             raise ValueError("duplicate receipt replay")
         self._store.record(receipt)
