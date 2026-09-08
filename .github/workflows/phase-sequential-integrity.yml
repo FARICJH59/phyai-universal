@@ -13,7 +13,7 @@ on:
       - 'src/phase7_reasoning/**'
       - 'src/phase8_evaluation/**'
       - 'src/production_hardening/**'
-      - 'tests/integration/test_phase_sequential_integrity.py'
+      - 'tests/test_phase_sequential_integrity.py'
       - '.github/workflows/phase-sequential-integrity.yml'
   pull_request:
     branches: [main]
@@ -27,7 +27,7 @@ on:
       - 'src/phase7_reasoning/**'
       - 'src/phase8_evaluation/**'
       - 'src/production_hardening/**'
-      - 'tests/integration/test_phase_sequential_integrity.py'
+      - 'tests/test_phase_sequential_integrity.py'
       - '.github/workflows/phase-sequential-integrity.yml'
 
 jobs:
@@ -40,4 +40,4 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install --upgrade pip
       - run: python -m pip install '.[test]'
-      - run: python -m pytest tests/integration/test_phase_sequential_integrity.py -q
+      - run: python -m pytest tests/test_phase_sequential_integrity.py -q
