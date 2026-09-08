@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
+import json
 from typing import Mapping, Protocol
 from uuid import UUID
 
@@ -22,6 +23,8 @@ class GovernedExecutionRequest:
             raise PermissionError("tenant mismatch")
         if self.command.project_id != self.policy_context.get("project_id"):
             raise PermissionError("project mismatch")
+        if self.request_digest != GovernedHoareClient.digest_request(self.command, self.artifact_hash, self.policy_context):
+            raise ValueError("request digest mismatch")
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +35,7 @@ class GovernedAdmission:
     lease_id: str | None
     fence_id: str | None
     reason: str
+    request_digest: str = ""
 
     def __post_init__(self) -> None:
         if not self.reason.strip():
@@ -40,6 +44,8 @@ class GovernedAdmission:
             raise ValueError("accepted admission requires capability, lease, and fence")
         if not self.accepted and any((self.capability_id, self.lease_id, self.fence_id)):
             raise ValueError("denied admission cannot carry execution authority")
+        if self.accepted and not self.request_digest.strip():
+            raise ValueError("accepted admission requires request digest")
 
 
 class HoareGovernanceTransport(Protocol):
@@ -60,20 +66,33 @@ class GovernedHoareClient:
         self._transport = transport
 
     @staticmethod
-    def digest_request(command: ControlCommand, artifact_hash: str) -> str:
-        canonical = "|".join(
-            (
-                command.tenant_id,
-                command.project_id,
-                str(command.command_id),
-                str(command.attempt_id),
-                str(command.sequence),
-                command.target_id,
-                command.command_type,
-                artifact_hash,
-            )
-        )
-        return sha256(canonical.encode("utf-8")).hexdigest()
+    def digest_request(
+        command: ControlCommand,
+        artifact_hash: str,
+        policy_context: Mapping[str, str] | None = None,
+    ) -> str:
+        context = dict(policy_context or {})
+        canonical = {
+            "tenant_id": command.tenant_id,
+            "project_id": command.project_id,
+            "command_id": str(command.command_id),
+            "attempt_id": str(command.attempt_id),
+            "sequence": command.sequence,
+            "proposed_at": command.proposed_at.isoformat(),
+            "target_id": command.target_id,
+            "command_type": command.command_type,
+            "parameters": command.parameters,
+            "confidence": command.confidence,
+            "safety_precondition_ids": list(command.safety_precondition_ids),
+            "scene_id": str(command.scene_id),
+            "source_observation_ids": [str(item) for item in command.source_observation_ids],
+            "provenance_uri": command.provenance_uri,
+            "schema_version": command.schema_version,
+            "artifact_hash": artifact_hash,
+            "policy_context": {key: context[key] for key in sorted(context)},
+        }
+        payload = json.dumps(canonical, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        return sha256(payload).hexdigest()
 
     def admit(
         self,
@@ -81,9 +100,11 @@ class GovernedHoareClient:
         artifact_hash: str,
         policy_context: Mapping[str, str],
     ) -> GovernedAdmission:
-        request_digest = self.digest_request(command, artifact_hash)
+        request_digest = self.digest_request(command, artifact_hash, policy_context)
         request = GovernedExecutionRequest(command, artifact_hash, policy_context, request_digest)
         admission = self._transport.admit(request)
         if admission.attempt_id != command.attempt_id:
             raise ValueError("HOARE admission attempt identity mismatch")
+        if admission.accepted and admission.request_digest != request_digest:
+            raise ValueError("HOARE admission request binding mismatch")
         return admission
