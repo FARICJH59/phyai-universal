@@ -47,6 +47,19 @@ class GovernedAdmission:
         if self.accepted and not self.request_digest.strip():
             raise ValueError("accepted admission requires request digest")
 
+    @classmethod
+    def accepted_for(
+        cls,
+        command: ControlCommand,
+        artifact_hash: str,
+        policy_context: Mapping[str, str],
+        capability_id: str,
+        lease_id: str,
+        fence_id: str,
+        reason: str = "admitted",
+    ) -> "GovernedAdmission":
+        return cls(True, command.attempt_id, capability_id, lease_id, fence_id, reason, GovernedHoareClient.digest_request(command, artifact_hash, policy_context))
+
 
 class HoareGovernanceTransport(Protocol):
     """Real transport boundary to an external HOARE/AEGIS/TCX deployment."""
