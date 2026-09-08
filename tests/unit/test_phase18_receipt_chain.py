@@ -4,7 +4,10 @@ from uuid import uuid4
 import pytest
 
 from src.phase1_contracts.contracts import ControlCommand
-from src.production_hardening.phase16_hoare_integration import GovernedAdmission
+from src.production_hardening.phase16_hoare_integration import (
+    GovernedHoareClient,
+    TransportAdmission,
+)
 from src.production_hardening.phase17_evidence import (
     DurableReceipt,
     ExecutionEvidence,
@@ -14,7 +17,12 @@ from src.production_hardening.phase17_evidence import (
     InMemoryEvidenceStore,
     sign_admission,
 )
-from src.production_hardening.phase18_receipt_chain import InMemoryReceiptChainStore, ReceiptChain, ReceiptChainEntry, ReceiptChainVerifier
+from src.production_hardening.phase18_receipt_chain import (
+    InMemoryReceiptChainStore,
+    ReceiptChain,
+    ReceiptChainEntry,
+    ReceiptChainVerifier,
+)
 
 
 def verified_receipts_pair():
@@ -25,7 +33,23 @@ def verified_receipts_pair():
         provenance_uri="urn:test", schema_version="v1",
     )
     context = {"tenant_id": "tenant-a", "project_id": "project-a"}
-    admission = GovernedAdmission.accepted_for(command, "artifact", context, "cap-1", "lease-1", "fence-1")
+    artifact_hash = "artifact"
+    request_digest = GovernedHoareClient.digest_request(command, artifact_hash, context)
+
+    class _Transport:
+        def admit(self, request):
+            return TransportAdmission(
+                accepted=True,
+                attempt_id=request.command.attempt_id,
+                capability_id="cap-1",
+                lease_id="lease-1",
+                fence_id="fence-1",
+                reason="admitted",
+                request_digest=request.request_digest,
+            )
+
+    admission = GovernedHoareClient(_Transport()).admit(command, artifact_hash, context)
+    assert admission.request_digest == request_digest
     identity = ExecutionIdentity.from_governed_admission(command, "artifact", "policy", admission)
     signer = HMACSHA256Signer("key-1", b"secret")
     signed = sign_admission(identity, signer)
