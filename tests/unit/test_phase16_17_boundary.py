@@ -20,15 +20,14 @@ class FakeTransport:
 def command():
     return ControlCommand(
         tenant_id="tenant-a", project_id="project-a", command_id=uuid4(), attempt_id=uuid4(),
-        sequence=1, proposed_at=datetime.now(timezone.utc), target_id="arm-1",
-        command_type="position", parameters={"x": 0.1}, confidence=0.95,
-        safety_precondition_ids=("safe-1",), scene_id=uuid4(), source_observation_ids=(uuid4(),),
-        provenance_uri="urn:test", schema_version="v1",
+        sequence=1, proposed_at=datetime.now(timezone.utc), target_id="arm-1", command_type="position",
+        parameters={"x": 0.1}, confidence=0.95, safety_precondition_ids=("safe-1",), scene_id=uuid4(),
+        source_observation_ids=(uuid4(),), provenance_uri="urn:test", schema_version="v1",
     )
 
 
 def context():
-    return {"tenant_id": "tenant-a", "project_id": "project-a"}
+    return {"tenant_id": "tenant-a", "project_id": "project-a", "policy_digest": "policy"}
 
 
 def admitted(cmd):
@@ -64,6 +63,14 @@ def test_boundary_rejects_artifact_or_policy_rebinding():
     object.__setattr__(envelope, "artifact_hash", "different")
     with pytest.raises(ValueError, match="artifact mismatch"):
         boundary.commit_evidence(envelope, signed, evidence, expected_device_id="device-1")
+
+
+def test_boundary_rejects_policy_rebinding():
+    cmd = command()
+    admission = admitted(cmd)
+    boundary = Phase16To17Boundary(GovernedHoareClient(FakeTransport(admission)), HMACSHA256Signer("key-1", b"secret"), EvidenceVerifier(InMemoryEvidenceStore()))
+    with pytest.raises(ValueError, match="policy digest mismatch"):
+        boundary.admit_and_sign(cmd, "artifact", context(), "different-policy")
 
 
 def test_boundary_digest_is_stable_for_same_handoff():
