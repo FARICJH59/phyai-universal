@@ -14,9 +14,10 @@ HOARE / AEGIS / TCX admission
     +--> lease_id
     +--> fence_id
     +--> attempt_id
+    +--> request_digest
     |
     v
-ExecutionIdentity
+ExecutionIdentity.from_governed_admission()
     |
     v
 SignedAdmissionArtifact
@@ -25,24 +26,17 @@ SignedAdmissionArtifact
 Physical/HIL execution evidence
     |
     v
+EvidenceVerifier.commit_verified_evidence()
+    |
+    v
 DurableReceipt
 ```
 
 ## Execution identity
 
-`ExecutionIdentity` binds:
+`ExecutionIdentity` binds tenant ID, project ID, command ID, attempt ID, artifact hash, capability ID, lease ID, fence ID, and policy digest. The canonical identity is SHA-256 hashed; changing any bound field changes the identity digest.
 
-- tenant ID
-- project ID
-- command ID
-- attempt ID
-- artifact hash
-- capability ID
-- lease ID
-- fence ID
-- policy digest
-
-The canonical identity is SHA-256 hashed. Changing any bound field changes the identity digest.
+Identity construction is sealed: direct construction without the internal provenance token fails closed. The supported construction path is `ExecutionIdentity.from_governed_admission()`, which requires an accepted Phase 16 admission with a request binding and matching attempt identity.
 
 ## Signed admission artifact
 
@@ -50,12 +44,7 @@ The canonical identity is SHA-256 hashed. Changing any bound field changes the i
 
 The signer is intentionally an explicit cryptographic boundary. Production deployments may inject a stronger asymmetric or hardware-backed signer/verifier without changing the evidence contract.
 
-A signature is accepted only when:
-
-1. the key ID matches;
-2. the algorithm matches;
-3. the identity digest recomputes exactly;
-4. the signature verifies over that digest.
+A signature is accepted only when the key ID matches, the algorithm matches, the identity digest recomputes exactly, and the signature verifies over that digest.
 
 ## Evidence binding
 
@@ -65,16 +54,9 @@ The capability, lease, and fence are indirectly but cryptographically bound beca
 
 ## Durable receipt
 
-`DurableReceipt` is content-addressed from:
-
-- identity digest
-- attempt ID
-- execution sequence
-- result digest
+`DurableReceipt` is content-addressed from identity digest, attempt ID, execution sequence, and result digest. Its constructor is sealed so a caller cannot manufacture a receipt object directly. `EvidenceVerifier.commit_verified_evidence()` is the only supported production path to a durable receipt and performs admission/evidence verification first.
 
 `InMemoryEvidenceStore` provides the reference replay guard. Production deployments should replace it with a durable, transactional store while preserving the same uniqueness invariant.
-
-Duplicate receipt digests are rejected. Receipt construction also verifies its own canonical digest.
 
 ## Fail-closed invariants
 
@@ -91,6 +73,8 @@ The following must fail closed:
 - evidence/admission mismatch;
 - device mismatch;
 - duplicate receipt replay;
+- direct identity construction;
+- direct receipt construction;
 - malformed receipt digest.
 
 ## What is not claimed
