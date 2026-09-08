@@ -51,6 +51,8 @@ class Phase16To17Boundary:
         policy_context: Mapping[str, str],
         policy_digest: str,
     ) -> tuple[Phase16AdmissionEnvelope, SignedAdmissionArtifact]:
+        if policy_context.get("policy_digest") != policy_digest:
+            raise ValueError("policy digest mismatch")
         admission = self._hoare_client.admit(command, artifact_hash, policy_context)
         envelope = Phase16AdmissionEnvelope(command, artifact_hash, policy_digest, admission)
         identity = ExecutionIdentity.from_governed_admission(command, artifact_hash, policy_digest, admission)
@@ -71,25 +73,10 @@ class Phase16To17Boundary:
             raise ValueError("signed admission artifact mismatch")
         if admission_artifact.identity.policy_digest != envelope.policy_digest:
             raise ValueError("signed admission policy mismatch")
-        return self._evidence_verifier.commit_verified_evidence(
-            admission_artifact,
-            evidence,
-            self._signer,
-            expected_device_id=expected_device_id,
-        )
+        return self._evidence_verifier.commit_verified_evidence(admission_artifact, evidence, self._signer, expected_device_id=expected_device_id)
 
 
 def boundary_digest(envelope: Phase16AdmissionEnvelope, admission_artifact: SignedAdmissionArtifact) -> str:
     """Stable audit digest for the exact Phase 16 -> Phase 17 handoff."""
-    canonical = "|".join(
-        (
-            envelope.command.tenant_id,
-            envelope.command.project_id,
-            str(envelope.command.command_id),
-            str(envelope.command.attempt_id),
-            envelope.artifact_hash,
-            envelope.policy_digest,
-            admission_artifact.identity_digest,
-        )
-    )
+    canonical = "|".join((envelope.command.tenant_id, envelope.command.project_id, str(envelope.command.command_id), str(envelope.command.attempt_id), envelope.artifact_hash, envelope.policy_digest, admission_artifact.identity_digest))
     return sha256(canonical.encode("utf-8")).hexdigest()
