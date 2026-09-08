@@ -6,18 +6,20 @@ import pytest
 from src.phase1_contracts.contracts import ControlCommand
 from src.production_hardening.phase16_hoare_integration import GovernedAdmission
 from src.production_hardening.phase17_evidence import (
+    DurableReceipt,
     ExecutionEvidence,
     ExecutionIdentity,
     EvidenceVerifier,
     HMACSHA256Signer,
     InMemoryEvidenceStore,
+    sign_admission,
 )
 from src.production_hardening.phase18_receipt_chain import InMemoryReceiptChainStore, ReceiptChain, ReceiptChainEntry, ReceiptChainVerifier
 
 
-def verified_receipt(sequence: int = 1, result: str = "result-a"):
+def verified_receipts_pair():
     command = ControlCommand(
-        tenant_id="tenant-a", project_id="project-a", command_id=uuid4(), attempt_id=uuid4(), sequence=sequence,
+        tenant_id="tenant-a", project_id="project-a", command_id=uuid4(), attempt_id=uuid4(), sequence=1,
         proposed_at=datetime.now(timezone.utc), target_id="arm-1", command_type="position", parameters={"x": 0.1},
         confidence=0.95, safety_precondition_ids=("safe-1",), scene_id=uuid4(), source_observation_ids=(uuid4(),),
         provenance_uri="urn:test", schema_version="v1",
@@ -26,42 +28,25 @@ def verified_receipt(sequence: int = 1, result: str = "result-a"):
     admission = GovernedAdmission.accepted_for(command, "artifact", context, "cap-1", "lease-1", "fence-1")
     identity = ExecutionIdentity.from_governed_admission(command, "artifact", "policy", admission)
     signer = HMACSHA256Signer("key-1", b"secret")
-    signed = __import__('src.production_hardening.phase17_evidence', fromlist=['sign_admission']).sign_admission(identity, signer)
-    evidence = ExecutionEvidence(identity.digest(), command.attempt_id, "jetson-1", sequence, 10, result, signed.signature)
-    return EvidenceVerifier(InMemoryEvidenceStore()).commit_verified_evidence(signed, evidence, signer, expected_device_id="jetson-1")
+    signed = sign_admission(identity, signer)
+    verifier = EvidenceVerifier(InMemoryEvidenceStore())
+    first = verifier.commit_verified_evidence(signed, ExecutionEvidence(identity.digest(), command.attempt_id, "jetson-1", 1, 10, "result-a", signed.signature), signer, expected_device_id="jetson-1")
+    second = verifier.commit_verified_evidence(signed, ExecutionEvidence(identity.digest(), command.attempt_id, "jetson-1", 2, 11, "result-b", signed.signature), signer, expected_device_id="jetson-1")
+    return first, second
 
 
-def test_chain_is_deterministic_and_links_predecessor():
+def test_chain_links_verified_receipts():
+    first, second = verified_receipts_pair()
     store = InMemoryReceiptChainStore()
     chain = ReceiptChain(store)
-    first = verified_receipt(1, "result-a")
-    second = verified_receipt(2, "result-b")
-    # A chain is per execution identity, so use the same identity for both links.
-    second = type(second)(first.identity_digest, first.attempt_id, 2, "result-b", second.receipt_digest)
-    # The second object above cannot be forged because DurableReceipt is sealed; create it through verified evidence instead.
-    command = ControlCommand(
-        tenant_id="tenant-a", project_id="project-a", command_id=uuid4(), attempt_id=first.attempt_id, sequence=2,
-        proposed_at=datetime.now(timezone.utc), target_id="arm-1", command_type="position", parameters={"x": 0.2},
-        confidence=0.95, safety_precondition_ids=("safe-1",), scene_id=uuid4(), source_observation_ids=(uuid4(),),
-        provenance_uri="urn:test", schema_version="v1",
-    )
-    # Use the same identity/attempt only to exercise chain ordering; Phase 18 consumes the verified receipt.
-    signer = HMACSHA256Signer("key-1", b"secret")
-    context = {"tenant_id": "tenant-a", "project_id": "project-a"}
-    admission = GovernedAdmission.accepted_for(command, "artifact", context, "cap-1", "lease-1", "fence-1")
-    identity = ExecutionIdentity.from_governed_admission(command, "artifact", "policy", admission)
-    signed = __import__('src.production_hardening.phase17_evidence', fromlist=['sign_admission']).sign_admission(identity, signer)
-    evidence = ExecutionEvidence(identity.digest(), command.attempt_id, "jetson-1", 2, 11, "result-b", signed.signature)
-    second = EvidenceVerifier(InMemoryEvidenceStore()).commit_verified_evidence(signed, evidence, signer, expected_device_id="jetson-1")
-
-    # The test above deliberately demonstrates that receipts from different identities cannot form one chain.
-    with pytest.raises(ValueError, match="identity mismatch"):
-        chain.append(first)
-        chain.append(second)
+    first_entry = chain.append(first)
+    second_entry = chain.append(second)
+    assert first_entry.previous_receipt_digest is None
+    assert second_entry.previous_receipt_digest == first_entry.chain_digest
+    assert ReceiptChainVerifier().verify(store.entries()).valid
 
 
 def test_chain_rejects_unverified_receipt_construction():
-    from src.production_hardening.phase17_evidence import DurableReceipt
     attempt = uuid4()
     digest = DurableReceipt.compute_digest("identity", attempt, 1, "result")
     with pytest.raises(PermissionError, match="must originate from verified evidence"):
@@ -69,17 +54,26 @@ def test_chain_rejects_unverified_receipt_construction():
 
 
 def test_chain_rejects_identity_rebinding():
+    first, _ = verified_receipts_pair()
     store = InMemoryReceiptChainStore()
     chain = ReceiptChain(store)
-    first = verified_receipt()
-    chain.append(first)
+    first_entry = chain.append(first)
     forged = ReceiptChainEntry(
         identity_digest="identity-b", attempt_id=first.attempt_id, sequence=2, result_digest="result-b",
-        previous_receipt_digest=first.receipt_digest,
-        chain_digest=ReceiptChainEntry.compute_digest("identity-b", first.attempt_id, 2, "result-b", first.receipt_digest),
+        previous_receipt_digest=first_entry.chain_digest,
+        chain_digest=ReceiptChainEntry.compute_digest("identity-b", first.attempt_id, 2, "result-b", first_entry.chain_digest),
     )
     with pytest.raises(ValueError, match="identity mismatch"):
         store.append(forged)
+
+
+def test_chain_rejects_sequence_replay():
+    first, _ = verified_receipts_pair()
+    store = InMemoryReceiptChainStore()
+    chain = ReceiptChain(store)
+    chain.append(first)
+    with pytest.raises(ValueError, match="sequence must increase"):
+        chain.append(first)
 
 
 def test_tampered_entry_fails_closed():
