@@ -106,8 +106,14 @@ class GovernedGripperDemo:
                 elapsed_ns=perf_counter_ns() - started,
             )
 
-        now = self.now().astimezone(timezone.utc)
-        proposed_at = command.proposed_at.astimezone(timezone.utc)
+        now_value = self.now()
+        if now_value.tzinfo is None or now_value.utcoffset() is None:
+            return finish("DENY", "invalid_clock", False)
+        now = now_value.astimezone(timezone.utc)
+        proposed_value = command.proposed_at
+        if proposed_value.tzinfo is None or proposed_value.utcoffset() is None:
+            return finish("DENY", "invalid_proposal_timestamp", False)
+        proposed_at = proposed_value.astimezone(timezone.utc)
         if now < proposed_at or now - proposed_at > self.max_command_age:
             return finish("DENY", "stale_or_future_proposal", False)
 
@@ -121,7 +127,11 @@ class GovernedGripperDemo:
         except Exception:
             return finish("DENY", "authorization_unavailable", False)
 
-        if not self.authorization_verifier(authorization):
+        try:
+            verified = self.authorization_verifier(authorization)
+        except Exception:
+            verified = False
+        if not verified:
             return finish("DENY", "authorization_verification_failed", False)
         if authorization.revoked:
             return finish("DENY", "authorization_revoked", False)
@@ -139,8 +149,15 @@ class GovernedGripperDemo:
         if not exact_binding:
             return finish("DENY", "authorization_binding_mismatch", False)
 
-        issued_at = authorization.issued_at.astimezone(timezone.utc)
-        expires_at = authorization.expires_at.astimezone(timezone.utc)
+        issued_value = authorization.issued_at
+        expires_value = authorization.expires_at
+        if (
+            issued_value.tzinfo is None or issued_value.utcoffset() is None
+            or expires_value.tzinfo is None or expires_value.utcoffset() is None
+        ):
+            return finish("DENY", "authorization_expired_or_invalid_window", False)
+        issued_at = issued_value.astimezone(timezone.utc)
+        expires_at = expires_value.astimezone(timezone.utc)
         if issued_at > now or expires_at <= now or expires_at <= issued_at:
             return finish("DENY", "authorization_expired_or_invalid_window", False)
 
