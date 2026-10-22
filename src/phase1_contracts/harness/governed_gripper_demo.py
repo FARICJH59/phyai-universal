@@ -5,6 +5,8 @@ a production HOARE/AEGIS client, a cryptographic verifier, or a robot driver.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from time import perf_counter_ns
@@ -12,6 +14,29 @@ from typing import Callable
 from uuid import UUID
 
 from src.phase1_contracts.contracts.contracts import ControlCommand
+
+
+def proposal_digest(command: ControlCommand) -> str:
+    """Hash all proposal fields that affect identity, scope, or simulated action."""
+    payload = {
+        "tenant_id": command.tenant_id,
+        "project_id": command.project_id,
+        "command_id": str(command.command_id),
+        "attempt_id": str(command.attempt_id),
+        "sequence": command.sequence,
+        "proposed_at": command.proposed_at.isoformat(),
+        "target_id": command.target_id,
+        "command_type": command.command_type,
+        "parameters": command.parameters,
+        "confidence": command.confidence,
+        "safety_precondition_ids": list(command.safety_precondition_ids),
+        "scene_id": str(command.scene_id),
+        "source_observation_ids": [str(value) for value in command.source_observation_ids],
+        "provenance_uri": command.provenance_uri,
+        "schema_version": command.schema_version,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +48,7 @@ class MockAuthorizationResult:
     attempt_id: UUID
     target_id: str
     command_type: str
+    action_digest: str
     issued_at: datetime
     expires_at: datetime
     revoked: bool = False
@@ -124,6 +150,11 @@ class GovernedGripperDemo:
             return finish("DENY", "stale_or_future_proposal", False)
 
         try:
+            original_digest = proposal_digest(command)
+        except (TypeError, ValueError):
+            return finish("DENY", "malformed_proposal", False)
+
+        try:
             authorization = self.authorization_provider(command)
         except Exception:
             return finish("DENY", "authorization_unavailable", False)
@@ -148,6 +179,7 @@ class GovernedGripperDemo:
             and authorization.attempt_id == command.attempt_id
             and authorization.target_id == command.target_id
             and authorization.command_type == command.command_type
+            and authorization.action_digest == original_digest
         )
         if not exact_binding:
             return finish("DENY", "authorization_binding_mismatch", False)
@@ -164,7 +196,11 @@ class GovernedGripperDemo:
         if issued_at > now or expires_at <= now or expires_at <= issued_at:
             return finish("DENY", "authorization_expired_or_invalid_window", False)
 
+        # Re-hash immediately before the simulated side effect: the dataclass is
+        # frozen, but its Mapping parameters can still be backed by a mutable dict.
         try:
+            if proposal_digest(command) != original_digest:
+                return finish("DENY", "proposal_changed_after_authorization", False)
             position = self.gripper.actuate(command)
         except (TypeError, ValueError):
             return finish("DENY", "target_rejected_command", False)
@@ -173,6 +209,7 @@ class GovernedGripperDemo:
             "event": "simulated_actuation",
             "target_id": self.gripper.target_id,
             "position_mm": str(position),
+            "action_digest": original_digest,
             "attempt_id": str(command.attempt_id),
             "command_id": str(command.command_id),
         })
