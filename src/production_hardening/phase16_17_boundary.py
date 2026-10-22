@@ -64,7 +64,10 @@ class Phase16To17Boundary:
             raise ValueError("policy digest mismatch")
         admission = self._hoare_client.admit(command, artifact_hash, policy_context)
         envelope = Phase16AdmissionEnvelope(command, artifact_hash, policy_digest, admission, dict(policy_context))
-        identity = ExecutionIdentity.from_governed_admission(command, artifact_hash, policy_digest, admission)
+        identity = ExecutionIdentity.from_governed_admission(
+            command, artifact_hash, policy_digest, admission,
+            policy_context=envelope.policy_context,
+        )
         artifact = sign_admission(identity, self._signer)
         return envelope, artifact
 
