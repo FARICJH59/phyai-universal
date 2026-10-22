@@ -60,7 +60,7 @@ def make_demo(command, authorization_factory=None, *, verifier=None, now=NOW):
         gripper,
         provider,
         verifier or (lambda result: result.proof == b"simulation-only"),
-        now=lambda: now,
+        now=now if callable(now) else (lambda: now),
     )
     return demo, gripper
 
