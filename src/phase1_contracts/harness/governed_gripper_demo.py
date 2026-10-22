@@ -184,6 +184,15 @@ class GovernedGripperDemo:
         if not exact_binding:
             return finish("DENY", "authorization_binding_mismatch", False)
 
+        # Re-read the clock after admission and verification: a grant/proposal can
+        # become stale while the provider or verifier is running.
+        decision_now_value = self.now()
+        if decision_now_value.tzinfo is None or decision_now_value.utcoffset() is None:
+            return finish("DENY", "invalid_clock", False)
+        decision_now = decision_now_value.astimezone(timezone.utc)
+        if decision_now < proposed_at or decision_now - proposed_at > self.max_command_age:
+            return finish("DENY", "stale_or_future_proposal", False)
+
         issued_value = authorization.issued_at
         expires_value = authorization.expires_at
         if (
@@ -193,7 +202,7 @@ class GovernedGripperDemo:
             return finish("DENY", "authorization_expired_or_invalid_window", False)
         issued_at = issued_value.astimezone(timezone.utc)
         expires_at = expires_value.astimezone(timezone.utc)
-        if issued_at > now or expires_at <= now or expires_at <= issued_at:
+        if issued_at > decision_now or expires_at <= decision_now or expires_at <= issued_at:
             return finish("DENY", "authorization_expired_or_invalid_window", False)
 
         # Re-hash immediately before the simulated side effect: the dataclass is
