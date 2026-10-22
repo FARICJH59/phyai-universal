@@ -41,6 +41,18 @@ The authorization provider and verifier are injected test doubles. The verifier 
 
 The suite also records an in-process elapsed-time measurement and decision/actuation evidence identifiers. This timing is only a local harness measurement; it is not a latency benchmark, a p95/p99 result, a deterministic timing guarantee, or a robot control-loop measurement.
 
+## Existing PHyAI governance-boundary audit
+
+A follow-up review of the existing Phase 16–17 boundary found that the HOARE transport validates a request digest, but the signed Phase 17 execution identity did not previously include that digest. In addition, `ControlCommand` is frozen while its `parameters` mapping can still be mutated after admission. That left the handoff without a final check that the exact proposed action was still the one admitted.
+
+The current branch now:
+- carries the validated admission request digest into the signed execution identity;
+- snapshots policy context when constructing the Phase 16 admission envelope;
+- recomputes the request digest before committing evidence;
+- rejects command/parameter mutation and checks that the signed tenant, project, command, attempt, capability, lease, and fence still match the envelope.
+
+The Phase 16–17 and Phase 17 Evidence CI workflows pass with these changes. This is a software-boundary improvement validated by tests, not proof that a deployed HOARE endpoint, production key management, physical actuator, or revocation service has been integrated. The mock gripper remains simulation-only.
+
 ## Research protocol after the tests pass
 
 1. Capture the commit SHA, Python version, dependency lock/environment, command line, test output, and UTC timestamp.
