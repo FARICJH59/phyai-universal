@@ -106,6 +106,12 @@ class GovernedGripperDemo:
                 elapsed_ns=perf_counter_ns() - started,
             )
 
+        if command.attempt_id in self._seen_attempts:
+            return finish("DENY", "replayed_attempt", False)
+        # Consume the attempt ID on first presentation, even if it is malformed,
+        # stale, denied, or admission becomes unavailable.
+        self._seen_attempts.add(command.attempt_id)
+
         now_value = self.now()
         if now_value.tzinfo is None or now_value.utcoffset() is None:
             return finish("DENY", "invalid_clock", False)
@@ -117,16 +123,13 @@ class GovernedGripperDemo:
         if now < proposed_at or now - proposed_at > self.max_command_age:
             return finish("DENY", "stale_or_future_proposal", False)
 
-        if command.attempt_id in self._seen_attempts:
-            return finish("DENY", "replayed_attempt", False)
-        # Consume attempt identity before contacting admission, including failures.
-        self._seen_attempts.add(command.attempt_id)
-
         try:
             authorization = self.authorization_provider(command)
         except Exception:
             return finish("DENY", "authorization_unavailable", False)
 
+        if not isinstance(authorization, MockAuthorizationResult):
+            return finish("DENY", "malformed_authorization_result", False)
         try:
             verified = self.authorization_verifier(authorization)
         except Exception:
