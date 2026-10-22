@@ -198,6 +198,42 @@ def test_expired_authorization_is_rejected():
     assert gripper.attempts == []
 
 
+def test_authorization_expiring_during_admission_fails_closed():
+    command = make_command()
+    clock = [NOW]
+
+    def slow_provider(proposal):
+        authorization = make_authorization(
+            proposal, expires_at=NOW + timedelta(seconds=1)
+        )
+        clock[0] = NOW + timedelta(seconds=2)
+        return authorization
+
+    demo, gripper = make_demo(command, slow_provider, now=lambda: clock[0])
+    result = demo.execute(command)
+
+    assert result.reason == "authorization_expired_or_invalid_window"
+    assert result.actuation_attempted is False
+    assert gripper.attempts == []
+
+
+def test_proposal_becoming_stale_during_admission_fails_closed():
+    command = make_command()
+    clock = [NOW]
+
+    def slow_provider(proposal):
+        authorization = make_authorization(proposal, expires_at=NOW + timedelta(seconds=10))
+        clock[0] = NOW + timedelta(seconds=3)
+        return authorization
+
+    demo, gripper = make_demo(command, slow_provider, now=lambda: clock[0])
+    result = demo.execute(command)
+
+    assert result.reason == "stale_or_future_proposal"
+    assert result.actuation_attempted is False
+    assert gripper.attempts == []
+
+
 def test_verifier_failure_is_rejected():
     command = make_command()
     demo, gripper = make_demo(command, verifier=lambda _result: False)
