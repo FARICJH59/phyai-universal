@@ -40,16 +40,20 @@ HOARE trusted authorization boundary
 (allow / deny / escalate; deployment-specific)
         |
         v
-Target adapter and independent target safety controls
+Target adapter verifies authorization bound to the exact proposal
         |
         v
-Actuation attempt
+Independent target safety controls -> simulated or physical actuation attempt
         |
         v
-Observed result + traceable evidence
-        |
-        +----> verification / reconciliation
+Observed result + traceable evidence -> verification / reconciliation
 ```
+
+### Authorization and adapter boundary
+
+The authorization decision must be delivered to the trusted target adapter through the deployment's approved interface; it must not be relayed as an unverified string or boolean from PHyAI. Before any actuation attempt, the adapter must verify that the authorization is valid and bound to the exact command/attempt, tenant, project, target, permitted scope, and freshness window. It must also apply replay protection and confirm that authority has not expired or been revoked through the configured trusted mechanism.
+
+This repository does not define a production HOARE authorization wire format, signature scheme, lease protocol, or revocation transport. Those must be specified against the actual HOARE/AEGIS implementation and reviewed before integration. A mock verifier in a simulation is test scaffolding, not cryptographic verification or proof of production authorization.
 
 ### Boundary rules
 
@@ -103,4 +107,4 @@ These measures are operational guidance, not a representation that a patent, tra
 
 ## Implementation status
 
-This document establishes a public integration boundary only. It does not add robot drivers, connect a live robot, authorize physical actuation, certify safety, or expose the private HOARE implementation. Each adapter and deployment remains a separate implementation and verification task.
+This document establishes a public integration boundary only. The separate simulated gripper demonstration is explicitly a mock-admission, simulation-only research harness. Neither this document nor that harness adds robot drivers, connects a live robot, validates production HOARE authorization, authorizes physical actuation, or certifies safety. Each adapter and deployment remains a separate implementation and verification task.
