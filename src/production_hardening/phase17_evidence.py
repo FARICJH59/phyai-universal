@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 import hmac
-from typing import Protocol
+from typing import Mapping, Protocol
 from uuid import UUID
 
 from src.phase1_contracts.contracts import ControlCommand
-from src.production_hardening.phase16_hoare_integration import GovernedAdmission
+from src.production_hardening.phase16_hoare_integration import GovernedAdmission, GovernedHoareClient
 
 
 _IDENTITY_FACTORY_TOKEN = object()
@@ -67,7 +67,15 @@ class ExecutionIdentity:
         return sha256(self.canonical().encode("utf-8")).hexdigest()
 
     @classmethod
-    def from_governed_admission(cls, command: ControlCommand, artifact_hash: str, policy_digest: str, admission: GovernedAdmission) -> "ExecutionIdentity":
+    def from_governed_admission(
+        cls,
+        command: ControlCommand,
+        artifact_hash: str,
+        policy_digest: str,
+        admission: GovernedAdmission,
+        *,
+        policy_context: Mapping[str, str],
+    ) -> "ExecutionIdentity":
         if not admission.accepted:
             raise PermissionError("cannot create execution identity from denied admission")
         if admission.attempt_id != command.attempt_id:
@@ -76,7 +84,19 @@ class ExecutionIdentity:
             raise ValueError("accepted admission is missing authority")
         if not admission.request_digest.strip():
             raise ValueError("accepted admission is missing request binding")
-        return cls(command.tenant_id, command.project_id, command.command_id, admission.attempt_id, artifact_hash, admission.capability_id, admission.lease_id, admission.fence_id, policy_digest, admission.request_digest, _provenance_token=_IDENTITY_FACTORY_TOKEN)
+        if policy_context.get("policy_digest") != policy_digest:
+            raise ValueError("policy digest mismatch")
+        expected_request_digest = GovernedHoareClient.digest_request(
+            command, artifact_hash, policy_context
+        )
+        if admission.request_digest != expected_request_digest:
+            raise ValueError("governed admission request digest mismatch")
+        return cls(
+            command.tenant_id, command.project_id, command.command_id,
+            admission.attempt_id, artifact_hash, admission.capability_id,
+            admission.lease_id, admission.fence_id, policy_digest,
+            admission.request_digest, _provenance_token=_IDENTITY_FACTORY_TOKEN
+        )
 
 
 @dataclass(frozen=True, slots=True)
