@@ -1,3 +1,4 @@
+from dataclasses import replace
 from uuid import uuid4
 from datetime import datetime, timezone
 
@@ -55,7 +56,9 @@ def client_admission(cmd, artifact="artifact-123", *, accepted=True):
 def governed_identity():
     cmd = command()
     admission = client_admission(cmd)
-    return ExecutionIdentity.from_governed_admission(cmd, "artifact-123", "policy-123", admission)
+    return ExecutionIdentity.from_governed_admission(
+        cmd, "artifact-123", "policy-123", admission, policy_context=context()
+    )
 
 
 def test_identity_digest_is_deterministic():
@@ -73,11 +76,27 @@ def test_identity_must_derive_authority_from_phase16_admission():
     cmd = command()
     denied = client_admission(cmd, accepted=False)
     with pytest.raises(PermissionError, match="denied admission"):
-        ExecutionIdentity.from_governed_admission(cmd, "artifact-123", "policy-123", denied)
+        ExecutionIdentity.from_governed_admission(
+            cmd, "artifact-123", "policy-123", denied, policy_context=context()
+        )
     admitted = client_admission(cmd)
-    item = ExecutionIdentity.from_governed_admission(cmd, "artifact-123", "policy-123", admitted)
+    item = ExecutionIdentity.from_governed_admission(
+        cmd, "artifact-123", "policy-123", admitted, policy_context=context()
+    )
     assert item.attempt_id == cmd.attempt_id
     assert item.capability_id == "cap-1"
+
+
+def test_identity_factory_rejects_admission_for_different_command():
+    original = command()
+    admission = client_admission(original)
+    altered = replace(original, parameters={"x": 0.9})
+
+    with pytest.raises(ValueError, match="request digest"):
+        ExecutionIdentity.from_governed_admission(
+            altered, "artifact-123", "policy-123", admission,
+            policy_context=context(),
+        )
 
 
 def test_signed_admission_verifies_with_matching_key():
@@ -93,6 +112,7 @@ def test_tampered_identity_fails_signature_verification():
     tampered = ExecutionIdentity.from_governed_admission(
         tampered_cmd, "different-artifact", "policy-123",
         client_admission(tampered_cmd, "different-artifact"),
+        policy_context=context(),
     )
     with pytest.raises(ValueError, match="identity digest"):
         type(artifact)(tampered, artifact.identity_digest, artifact.key_id, artifact.algorithm, artifact.signature)
