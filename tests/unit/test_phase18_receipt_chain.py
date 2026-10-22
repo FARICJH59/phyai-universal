@@ -32,7 +32,7 @@ def verified_receipts_pair():
         confidence=0.95, safety_precondition_ids=("safe-1",), scene_id=uuid4(), source_observation_ids=(uuid4(),),
         provenance_uri="urn:test", schema_version="v1",
     )
-    context = {"tenant_id": "tenant-a", "project_id": "project-a"}
+    context = {"tenant_id": "tenant-a", "project_id": "project-a", "policy_digest": "policy"}
     artifact_hash = "artifact"
     request_digest = GovernedHoareClient.digest_request(command, artifact_hash, context)
 
@@ -50,7 +50,7 @@ def verified_receipts_pair():
 
     admission = GovernedHoareClient(_Transport()).admit(command, artifact_hash, context)
     assert admission.request_digest == request_digest
-    identity = ExecutionIdentity.from_governed_admission(command, "artifact", "policy", admission)
+    identity = ExecutionIdentity.from_governed_admission(command, "artifact", "policy", admission, policy_context=context)
     signer = HMACSHA256Signer("key-1", b"secret")
     signed = sign_admission(identity, signer)
     verifier = EvidenceVerifier(InMemoryEvidenceStore())

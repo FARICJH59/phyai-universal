@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 import hmac
-from typing import Protocol
+from typing import Mapping, Protocol
 from uuid import UUID
 
 from src.phase1_contracts.contracts import ControlCommand
-from src.production_hardening.phase16_hoare_integration import GovernedAdmission
+from src.production_hardening.phase16_hoare_integration import GovernedAdmission, GovernedHoareClient
 
 
 _IDENTITY_FACTORY_TOKEN = object()
@@ -27,6 +27,7 @@ class ExecutionIdentity:
     lease_id: str
     fence_id: str
     policy_digest: str
+    request_digest: str
 
     def __init__(
         self,
@@ -39,12 +40,13 @@ class ExecutionIdentity:
         lease_id: str,
         fence_id: str,
         policy_digest: str,
+        request_digest: str = "",
         *,
         _provenance_token: object | None = None,
     ) -> None:
         if _provenance_token is not _IDENTITY_FACTORY_TOKEN:
             raise PermissionError("execution identity must originate from governed admission")
-        for name, value in (("tenant_id", tenant_id), ("project_id", project_id), ("artifact_hash", artifact_hash), ("capability_id", capability_id), ("lease_id", lease_id), ("fence_id", fence_id), ("policy_digest", policy_digest)):
+        for name, value in (("tenant_id", tenant_id), ("project_id", project_id), ("artifact_hash", artifact_hash), ("capability_id", capability_id), ("lease_id", lease_id), ("fence_id", fence_id), ("policy_digest", policy_digest), ("request_digest", request_digest)):
             if not value.strip():
                 raise ValueError(f"{name} is required")
         object.__setattr__(self, "tenant_id", tenant_id)
@@ -56,15 +58,24 @@ class ExecutionIdentity:
         object.__setattr__(self, "lease_id", lease_id)
         object.__setattr__(self, "fence_id", fence_id)
         object.__setattr__(self, "policy_digest", policy_digest)
+        object.__setattr__(self, "request_digest", request_digest)
 
     def canonical(self) -> str:
-        return "|".join((self.tenant_id, self.project_id, str(self.command_id), str(self.attempt_id), self.artifact_hash, self.capability_id, self.lease_id, self.fence_id, self.policy_digest))
+        return "|".join((self.tenant_id, self.project_id, str(self.command_id), str(self.attempt_id), self.artifact_hash, self.capability_id, self.lease_id, self.fence_id, self.policy_digest, self.request_digest))
 
     def digest(self) -> str:
         return sha256(self.canonical().encode("utf-8")).hexdigest()
 
     @classmethod
-    def from_governed_admission(cls, command: ControlCommand, artifact_hash: str, policy_digest: str, admission: GovernedAdmission) -> "ExecutionIdentity":
+    def from_governed_admission(
+        cls,
+        command: ControlCommand,
+        artifact_hash: str,
+        policy_digest: str,
+        admission: GovernedAdmission,
+        *,
+        policy_context: Mapping[str, str],
+    ) -> "ExecutionIdentity":
         if not admission.accepted:
             raise PermissionError("cannot create execution identity from denied admission")
         if admission.attempt_id != command.attempt_id:
@@ -73,7 +84,19 @@ class ExecutionIdentity:
             raise ValueError("accepted admission is missing authority")
         if not admission.request_digest.strip():
             raise ValueError("accepted admission is missing request binding")
-        return cls(command.tenant_id, command.project_id, command.command_id, admission.attempt_id, artifact_hash, admission.capability_id, admission.lease_id, admission.fence_id, policy_digest, _provenance_token=_IDENTITY_FACTORY_TOKEN)
+        if policy_context.get("policy_digest") != policy_digest:
+            raise ValueError("policy digest mismatch")
+        expected_request_digest = GovernedHoareClient.digest_request(
+            command, artifact_hash, policy_context
+        )
+        if admission.request_digest != expected_request_digest:
+            raise ValueError("governed admission request digest mismatch")
+        return cls(
+            command.tenant_id, command.project_id, command.command_id,
+            admission.attempt_id, artifact_hash, admission.capability_id,
+            admission.lease_id, admission.fence_id, policy_digest,
+            admission.request_digest, _provenance_token=_IDENTITY_FACTORY_TOKEN
+        )
 
 
 @dataclass(frozen=True, slots=True)

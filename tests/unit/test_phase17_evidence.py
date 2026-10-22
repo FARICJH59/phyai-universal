@@ -1,10 +1,11 @@
+from dataclasses import replace
 from uuid import uuid4
 from datetime import datetime, timezone
 
 import pytest
 
 from src.phase1_contracts.contracts import ControlCommand
-from src.production_hardening.phase16_hoare_integration import GovernedAdmission, GovernedHoareClient
+from src.production_hardening.phase16_hoare_integration import GovernedHoareClient, TransportAdmission
 from src.production_hardening.phase17_evidence import (
     DurableReceipt,
     ExecutionEvidence,
@@ -17,6 +18,14 @@ from src.production_hardening.phase17_evidence import (
 )
 
 
+class FakeTransport:
+    def __init__(self, response):
+        self.response = response
+
+    def admit(self, request):
+        return self.response(request)
+
+
 def command():
     return ControlCommand(
         tenant_id="tenant-a", project_id="project-a", command_id=uuid4(), attempt_id=uuid4(), sequence=1,
@@ -26,16 +35,36 @@ def command():
     )
 
 
+def context():
+    return {"tenant_id": "tenant-a", "project_id": "project-a", "policy_digest": "policy-123"}
+
+
+def client_admission(cmd, artifact="artifact-123", *, accepted=True):
+    ctx = context()
+
+    def respond(request):
+        if not accepted:
+            return TransportAdmission(False, request.command.attempt_id, None, None, None, "denied")
+        return TransportAdmission(
+            True, request.command.attempt_id, "cap-1", "lease-1", "fence-1", "admitted",
+            request.request_digest,
+        )
+
+    return GovernedHoareClient(FakeTransport(respond)).admit(cmd, artifact, ctx)
+
+
 def governed_identity():
     cmd = command()
-    context = {"tenant_id": "tenant-a", "project_id": "project-a"}
-    admission = GovernedAdmission.accepted_for(cmd, "artifact-123", context, "cap-1", "lease-1", "fence-1")
-    return ExecutionIdentity.from_governed_admission(cmd, "artifact-123", "policy-123", admission)
+    admission = client_admission(cmd)
+    return ExecutionIdentity.from_governed_admission(
+        cmd, "artifact-123", "policy-123", admission, policy_context=context()
+    )
 
 
 def test_identity_digest_is_deterministic():
     item = governed_identity()
     assert item.digest() == item.digest() and len(item.digest()) == 64
+    assert item.request_digest
 
 
 def test_direct_identity_construction_is_sealed():
@@ -45,13 +74,29 @@ def test_direct_identity_construction_is_sealed():
 
 def test_identity_must_derive_authority_from_phase16_admission():
     cmd = command()
-    denied = GovernedAdmission(False, cmd.attempt_id, None, None, None, "denied")
+    denied = client_admission(cmd, accepted=False)
     with pytest.raises(PermissionError, match="denied admission"):
-        ExecutionIdentity.from_governed_admission(cmd, "artifact", "policy", denied)
-    admitted = GovernedAdmission.accepted_for(cmd, "artifact", {"tenant_id": "tenant-a", "project_id": "project-a"}, "cap-1", "lease-1", "fence-1")
-    item = ExecutionIdentity.from_governed_admission(cmd, "artifact", "policy", admitted)
+        ExecutionIdentity.from_governed_admission(
+            cmd, "artifact-123", "policy-123", denied, policy_context=context()
+        )
+    admitted = client_admission(cmd)
+    item = ExecutionIdentity.from_governed_admission(
+        cmd, "artifact-123", "policy-123", admitted, policy_context=context()
+    )
     assert item.attempt_id == cmd.attempt_id
     assert item.capability_id == "cap-1"
+
+
+def test_identity_factory_rejects_admission_for_different_command():
+    original = command()
+    admission = client_admission(original)
+    altered = replace(original, parameters={"x": 0.9})
+
+    with pytest.raises(ValueError, match="request digest"):
+        ExecutionIdentity.from_governed_admission(
+            altered, "artifact-123", "policy-123", admission,
+            policy_context=context(),
+        )
 
 
 def test_signed_admission_verifies_with_matching_key():
@@ -63,9 +108,11 @@ def test_signed_admission_verifies_with_matching_key():
 def test_tampered_identity_fails_signature_verification():
     signer = HMACSHA256Signer("key-1", b"test-secret")
     artifact = sign_admission(governed_identity(), signer)
+    tampered_cmd = command()
     tampered = ExecutionIdentity.from_governed_admission(
-        command(), "different-artifact", "policy-123",
-        GovernedAdmission.accepted_for(command(), "different-artifact", {"tenant_id": "tenant-a", "project_id": "project-a"}, "cap-1", "lease-1", "fence-1")
+        tampered_cmd, "different-artifact", "policy-123",
+        client_admission(tampered_cmd, "different-artifact"),
+        policy_context=context(),
     )
     with pytest.raises(ValueError, match="identity digest"):
         type(artifact)(tampered, artifact.identity_digest, artifact.key_id, artifact.algorithm, artifact.signature)
