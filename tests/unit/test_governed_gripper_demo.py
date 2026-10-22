@@ -8,6 +8,7 @@ from src.phase1_contracts.harness.governed_gripper_demo import (
     GovernedGripperDemo,
     MockAuthorizationResult,
     SimulatedGripper,
+    proposal_digest,
 )
 
 NOW = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
@@ -41,6 +42,7 @@ def make_authorization(command, **overrides):
         "attempt_id": command.attempt_id,
         "target_id": command.target_id,
         "command_type": command.command_type,
+        "action_digest": proposal_digest(command),
         "issued_at": NOW - timedelta(milliseconds=1),
         "expires_at": NOW + timedelta(seconds=1),
     }
@@ -132,11 +134,35 @@ def test_replayed_attempt_is_rejected():
     assert gripper.attempts == [20.0]
 
 
-def test_authorization_bound_to_different_target_is_rejected():
+@pytest.mark.parametrize(
+    ("field", "wrong_value"),
+    [
+        ("target_id", "other-gripper"),
+        ("command_type", "different-action"),
+        ("tenant_id", "other-tenant"),
+        ("project_id", "other-project"),
+        ("command_id", uuid4()),
+        ("attempt_id", uuid4()),
+    ],
+)
+def test_authorization_binding_mismatch_never_actuates(field, wrong_value):
     command = make_command()
     demo, gripper = make_demo(
         command,
-        lambda proposal: make_authorization(proposal, target_id="other-gripper"),
+        lambda proposal: make_authorization(proposal, **{field: wrong_value}),
+    )
+
+    result = demo.execute(command)
+
+    assert result.reason == "authorization_binding_mismatch"
+    assert gripper.attempts == []
+
+
+def test_authorization_with_different_action_digest_is_rejected():
+    command = make_command()
+    demo, gripper = make_demo(
+        command,
+        lambda proposal: make_authorization(proposal, action_digest="0" * 64),
     )
 
     result = demo.execute(command)
@@ -191,6 +217,32 @@ def test_verifier_exception_fails_closed():
     result = demo.execute(command)
 
     assert result.reason == "authorization_verification_failed"
+    assert gripper.attempts == []
+
+
+def test_malformed_authorization_result_fails_closed():
+    command = make_command()
+    demo, gripper = make_demo(command, lambda _proposal: None)
+
+    result = demo.execute(command)
+
+    assert result.reason == "malformed_authorization_result"
+    assert gripper.attempts == []
+
+
+def test_proposal_mutation_after_admission_fails_closed():
+    command = make_command()
+
+    def mutate_after_authorization(proposal):
+        authorization = make_authorization(proposal)
+        proposal.parameters["position_mm"] = 10.0
+        return authorization
+
+    demo, gripper = make_demo(command, mutate_after_authorization)
+    result = demo.execute(command)
+
+    assert result.reason == "proposal_changed_after_authorization"
+    assert result.actuation_attempted is False
     assert gripper.attempts == []
 
 
