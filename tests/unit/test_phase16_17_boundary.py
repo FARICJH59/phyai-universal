@@ -48,6 +48,7 @@ def test_boundary_only_signs_accepted_phase16_admission():
     assert signed.identity.capability_id == "cap-1"
     assert signed.identity.lease_id == "lease-1"
     assert signed.identity.fence_id == "fence-1"
+    assert signed.identity.request_digest == admission.request_digest
 
 
 def test_denied_admission_cannot_cross_boundary():
@@ -89,3 +90,34 @@ def test_local_governed_admission_constructor_is_sealed():
     cmd = command()
     with pytest.raises(PermissionError, match="only originate from HOARE transport"):
         GovernedAdmission(True, cmd.attempt_id, "cap-1", "lease-1", "fence-1", "admitted", "digest")
+
+
+
+def test_boundary_rejects_command_mutation_after_admission():
+    cmd = command()
+    admission = admitted(cmd)
+    boundary = Phase16To17Boundary(
+        GovernedHoareClient(FakeTransport(admission)),
+        HMACSHA256Signer("key-1", b"secret"),
+        EvidenceVerifier(InMemoryEvidenceStore()),
+    )
+    envelope, signed = boundary.admit_and_sign(cmd, "artifact", context(), "policy")
+    evidence = ExecutionEvidence(signed.identity_digest, cmd.attempt_id, "device-1", 1, 10, "result", signed.signature)
+
+    # ControlCommand is frozen but its parameters mapping can still be mutable.
+    cmd.parameters["x"] = 999.0
+    with pytest.raises(ValueError, match="request digest"):
+        boundary.commit_evidence(envelope, signed, evidence, expected_device_id="device-1")
+
+
+def test_boundary_snapshots_policy_context():
+    cmd = command()
+    admission = admitted(cmd)
+    boundary = Phase16To17Boundary(
+        GovernedHoareClient(FakeTransport(admission)),
+        HMACSHA256Signer("key-1", b"secret"),
+        EvidenceVerifier(InMemoryEvidenceStore()),
+    )
+    envelope, _signed = boundary.admit_and_sign(cmd, "artifact", context(), "policy")
+    with pytest.raises(TypeError):
+        envelope.policy_context["policy_digest"] = "tampered"
