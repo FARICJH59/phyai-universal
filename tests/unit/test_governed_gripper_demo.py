@@ -13,7 +13,7 @@ from src.phase1_contracts.harness.governed_gripper_demo import (
 NOW = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
 
 
-def make_command(*, proposed_at=NOW, attempt_id=None, target_id="sim-gripper-1"):
+def make_command(*, proposed_at=NOW, attempt_id=None, target_id="sim-gripper-1", position=20.0):
     return ControlCommand(
         "tenant-a",
         "project-a",
@@ -23,7 +23,7 @@ def make_command(*, proposed_at=NOW, attempt_id=None, target_id="sim-gripper-1")
         proposed_at,
         target_id,
         "set_gripper_position_mm",
-        {"position_mm": 20.0},
+        {"position_mm": position},
         0.95,
         ["simulation-workspace-clear"],
         uuid4(),
@@ -120,8 +120,7 @@ def test_stale_proposal_fails_before_authorization():
 
 
 def test_replayed_attempt_is_rejected():
-    attempt_id = uuid4()
-    command = make_command(attempt_id=attempt_id)
+    command = make_command()
     demo, gripper = make_demo(command)
 
     first = demo.execute(command)
@@ -183,9 +182,20 @@ def test_verifier_failure_is_rejected():
     assert gripper.attempts == []
 
 
-def test_out_of_bounds_target_command_is_not_actuated():
+def test_verifier_exception_fails_closed():
     command = make_command()
-    object.__setattr__(command, "parameters", {"position_mm": 100.0})
+    def broken_verifier(_result):
+        raise RuntimeError("mock verifier failure")
+    demo, gripper = make_demo(command, verifier=broken_verifier)
+
+    result = demo.execute(command)
+
+    assert result.reason == "authorization_verification_failed"
+    assert gripper.attempts == []
+
+
+def test_out_of_bounds_target_command_is_not_actuated():
+    command = make_command(position=100.0)
     demo, gripper = make_demo(command)
 
     result = demo.execute(command)
