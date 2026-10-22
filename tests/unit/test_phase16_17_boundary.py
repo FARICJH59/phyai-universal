@@ -42,7 +42,8 @@ def test_boundary_only_signs_accepted_phase16_admission():
     admission = admitted(cmd)
     boundary = Phase16To17Boundary(GovernedHoareClient(FakeTransport(admission)), HMACSHA256Signer("key-1", b"secret"), EvidenceVerifier(InMemoryEvidenceStore()))
     envelope, signed = boundary.admit_and_sign(cmd, "artifact", context(), "policy")
-    assert envelope.admission is admission
+    # Transport reconstruction preserves the admission contract, not Python object identity.
+    assert envelope.admission == admission
     assert signed.identity.attempt_id == cmd.attempt_id
     assert signed.identity.capability_id == "cap-1"
     assert signed.identity.lease_id == "lease-1"
