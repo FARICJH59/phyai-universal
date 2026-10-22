@@ -76,6 +76,10 @@ class Phase16To17Boundary:
         *,
         expected_device_id: str,
     ):
+        if admission_artifact.identity.artifact_hash != envelope.artifact_hash:
+            raise ValueError("signed admission artifact mismatch")
+        if admission_artifact.identity.policy_digest != envelope.policy_digest:
+            raise ValueError("signed admission policy mismatch")
         # Recompute at evidence commit because ControlCommand.parameters may be a mutable mapping.
         expected_request_digest = GovernedHoareClient.digest_request(
             envelope.command, envelope.artifact_hash, envelope.policy_context
@@ -96,10 +100,6 @@ class Phase16To17Boundary:
             raise ValueError("signed admission authority mismatch")
         if admission_artifact.identity.attempt_id != envelope.command.attempt_id:
             raise ValueError("signed admission attempt identity mismatch")
-        if admission_artifact.identity.artifact_hash != envelope.artifact_hash:
-            raise ValueError("signed admission artifact mismatch")
-        if admission_artifact.identity.policy_digest != envelope.policy_digest:
-            raise ValueError("signed admission policy mismatch")
         return self._evidence_verifier.commit_verified_evidence(admission_artifact, evidence, self._signer, expected_device_id=expected_device_id)
 
 
