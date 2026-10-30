@@ -8,7 +8,12 @@ from src.production_hardening.phase16_hoare_integration import GovernedAdmission
 
 
 def _finite_number(value: object) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and isfinite(value)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return isfinite(float(value))
+    except (OverflowError, TypeError, ValueError):
+        return False
 
 
 @dataclass(frozen=True, slots=True)
