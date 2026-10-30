@@ -126,3 +126,38 @@ def test_sensor_sequence_rejects_replay_or_reordering():
     ]
     with pytest.raises(ValueError, match="sequence must increase"):
         validate_sensor_sequence(observations)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_hardware_observation_rejects_non_finite_values(value):
+    with pytest.raises(ValueError, match="finite"):
+        HardwareObservation("tenant", "project", "robot-1", 0, 10, (value,))
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), True])
+def test_actuation_request_rejects_non_finite_or_boolean_parameters(value):
+    with pytest.raises(ValueError, match="finite"):
+        ActuationRequest("tenant", "project", "robot-1", "attempt", "digest", {"velocity": value})
+
+
+def test_sensor_sequence_rejects_timestamp_regression():
+    observations = [
+        HardwareObservation("tenant", "project", "robot-1", 0, 20, (1.0,)),
+        HardwareObservation("tenant", "project", "robot-1", 1, 10, (2.0,)),
+    ]
+    with pytest.raises(ValueError, match="timestamp must increase"):
+        validate_sensor_sequence(observations)
+
+
+def test_sensor_sequence_rejects_device_identity_change():
+    observations = [
+        HardwareObservation("tenant", "project", "robot-1", 0, 10, (1.0,)),
+        HardwareObservation("tenant", "project", "robot-2", 1, 20, (2.0,)),
+    ]
+    with pytest.raises(ValueError, match="device identity changed"):
+        validate_sensor_sequence(observations)
+
+
+def test_execution_evidence_rejects_invalid_verified_type():
+    with pytest.raises(ValueError, match="verified must be a boolean"):
+        ExecutionEvidence("attempt", "robot-1", 1, "digest", 1)
