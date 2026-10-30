@@ -161,3 +161,8 @@ def test_sensor_sequence_rejects_device_identity_change():
 def test_execution_evidence_rejects_invalid_verified_type():
     with pytest.raises(ValueError, match="verified must be a boolean"):
         ExecutionEvidence("attempt", "robot-1", 1, "digest", 1)
+
+
+def test_observation_rejects_integer_too_large_for_finite_float():
+    with pytest.raises(ValueError, match="finite"):
+        HardwareObservation("tenant", "project", "robot-1", 0, 10, (10 ** 10000,))
