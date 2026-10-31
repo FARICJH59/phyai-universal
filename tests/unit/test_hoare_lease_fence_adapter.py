@@ -113,7 +113,7 @@ def test_adapter_rejects_stale_signed_status():
 
 def test_adapter_rejects_response_expired_before_dispatch():
     transport = FakeHoareTransport(
-        lambda req: status_for(req, issued_at=_NOW - 10, response_expires_at=_NOW - 1)
+        lambda req: status_for(req, issued_at=_NOW - 10, response_expires_at=_NOW - 5)
     )
     with pytest.raises(PermissionError, match="response has expired"):
         validate(adapter(transport, max_response_age_seconds=30))
