@@ -16,4 +16,4 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[test]"
-      - run: python -m pytest tests/unit/test_phase15_hil.py -q
+      - run: python -m pytest tests/unit/test_admission_proof.py tests/unit/test_phase15_hil.py -q
