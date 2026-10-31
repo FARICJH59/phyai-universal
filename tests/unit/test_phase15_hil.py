@@ -1,6 +1,8 @@
 from uuid import uuid4
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from src.phase1_contracts.contracts import ControlCommand
 from src.production_hardening.phase15_hil import (
@@ -10,7 +12,39 @@ from src.production_hardening.phase15_hil import (
     HardwareObservation,
     validate_sensor_sequence,
 )
+from src.production_hardening.admission_proof import (
+    AdmissionClaims, Ed25519AdmissionProofVerifier, sign_admission_claims,
+)
 from src.production_hardening.phase16_hoare_integration import GovernedHoareClient, TransportAdmission
+
+
+
+_TEST_PRIVATE_KEY = Ed25519PrivateKey.generate()
+_TEST_PUBLIC_KEY = _TEST_PRIVATE_KEY.public_key().public_bytes(
+    encoding=serialization.Encoding.Raw,
+    format=serialization.PublicFormat.Raw,
+)
+_TEST_NOW = 1_800_000_000
+_TEST_VERIFIER = Ed25519AdmissionProofVerifier(
+    {"test-hoare-key": _TEST_PUBLIC_KEY}, clock=lambda: _TEST_NOW
+)
+
+
+def signed_proof(cmd):
+    digest = GovernedHoareClient.digest_request(cmd, "artifact", context())
+    claims = AdmissionClaims(
+        authority_id="hoare-test", tenant_id=cmd.tenant_id, project_id=cmd.project_id,
+        device_id=cmd.target_id, attempt_id=str(cmd.attempt_id), request_digest=digest,
+        capability_id="cap-1", lease_id="lease-1", fence_id="fence-1",
+        key_id="test-hoare-key", issued_at=_TEST_NOW - 1, expires_at=_TEST_NOW + 30,
+    )
+    return sign_admission_claims(claims, _TEST_PRIVATE_KEY)
+
+
+def execute_with_proof(actuator, req, authority, original_command):
+    return HardwareInLoopBoundary(actuator, _TEST_VERIFIER).execute(
+        req, authority, signed_proof(original_command)
+    )
 
 
 class FakeTransport:
@@ -66,14 +100,14 @@ def test_hil_rejects_fabricated_structural_authority():
     cmd = command()
     req = request(cmd)
     with pytest.raises(PermissionError, match="requires Phase 16"):
-        HardwareInLoopBoundary(actuator).execute(req, fabricated)
+        HardwareInLoopBoundary(actuator, _TEST_VERIFIER).execute(req, fabricated, signed_proof(cmd))
     assert actuator.calls == 0
 
 
 def test_hil_accepts_only_phase16_governed_admission():
     cmd = command()
     actuator = Actuator()
-    evidence = HardwareInLoopBoundary(actuator).execute(request(cmd), governed_authority(cmd))
+    evidence = execute_with_proof(actuator, request(cmd), governed_authority(cmd), cmd)
     assert evidence.verified
     assert evidence.attempt_id == str(cmd.attempt_id)
     assert actuator.calls == 1
@@ -85,7 +119,7 @@ def test_hil_rejects_denied_phase16_admission():
     authority = GovernedHoareClient(FakeTransport(denied)).admit(cmd, "artifact", context())
     actuator = Actuator()
     with pytest.raises(PermissionError, match="admission denied"):
-        HardwareInLoopBoundary(actuator).execute(request(cmd), authority)
+        execute_with_proof(actuator, request(cmd), authority, cmd)
     assert actuator.calls == 0
 
 
@@ -96,14 +130,14 @@ def test_hil_binds_attempt_to_governed_authority():
     # Simulate hostile mutation bypassing the frozen dataclass API.
     object.__setattr__(req, "attempt_id", str(uuid4()))
     with pytest.raises(ValueError, match="attempt identity"):
-        HardwareInLoopBoundary(actuator).execute(req, governed_authority(cmd))
+        execute_with_proof(actuator, req, governed_authority(cmd), cmd)
     assert actuator.calls == 0
 
 
 def test_hil_rejects_unverified_evidence():
     cmd = command()
     with pytest.raises(RuntimeError, match="evidence failed verification"):
-        HardwareInLoopBoundary(Actuator(False)).execute(request(cmd), governed_authority(cmd))
+        execute_with_proof(Actuator(False), request(cmd), governed_authority(cmd), cmd)
 
 
 def test_sensor_sequence_preserves_tenant_project_and_order():
@@ -207,7 +241,7 @@ def test_hil_rejects_actuation_request_rebound_to_altered_command(field, value):
             dict(altered.parameters), altered, "artifact", context()
         )
         with pytest.raises(PermissionError, match="does not bind"):
-            HardwareInLoopBoundary(actuator).execute(rebound, authority)
+            execute_with_proof(actuator, rebound, authority, cmd)
     assert actuator.calls == 0
 
 
@@ -218,7 +252,7 @@ def test_hil_rechecks_mutable_command_parameters_immediately_before_actuator():
     cmd.parameters["velocity"] = 999.0
     actuator = Actuator()
     with pytest.raises(ValueError, match="parameters do not match"):
-        HardwareInLoopBoundary(actuator).execute(req, authority)
+        execute_with_proof(actuator, req, authority, cmd)
     assert actuator.calls == 0
 
 
@@ -234,5 +268,5 @@ def test_hil_rejects_wrong_artifact_or_policy_context_binding():
     )
     actuator = Actuator()
     with pytest.raises(PermissionError, match="does not bind"):
-        HardwareInLoopBoundary(actuator).execute(rebound, authority)
+        execute_with_proof(actuator, rebound, authority, cmd)
     assert actuator.calls == 0
