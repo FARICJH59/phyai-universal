@@ -5,6 +5,7 @@ from math import isfinite
 from typing import Mapping, Protocol, Sequence
 
 from src.phase1_contracts.contracts import ControlCommand
+from src.production_hardening.admission_proof import AdmissionProofVerifier, SignedAdmissionProof
 from src.production_hardening.phase16_hoare_integration import GovernedAdmission, GovernedHoareClient
 
 
@@ -114,10 +115,18 @@ class PhysicalActuator(Protocol):
 class HardwareInLoopBoundary:
     """Physical I/O boundary that accepts only sealed Phase-16 authority."""
 
-    def __init__(self, actuator: PhysicalActuator) -> None:
+    def __init__(self, actuator: PhysicalActuator, admission_proof_verifier: AdmissionProofVerifier) -> None:
+        if not isinstance(admission_proof_verifier, AdmissionProofVerifier):
+            raise TypeError("a trusted HOARE admission proof verifier is required")
         self._actuator = actuator
+        self._admission_proof_verifier = admission_proof_verifier
 
-    def execute(self, request: ActuationRequest, authority: GovernedAdmission) -> ExecutionEvidence:
+    def execute(
+        self,
+        request: ActuationRequest,
+        authority: GovernedAdmission,
+        proof: SignedAdmissionProof,
+    ) -> ExecutionEvidence:
         if not isinstance(authority, GovernedAdmission):
             raise PermissionError("physical actuation requires Phase 16 governed admission")
         if not authority.accepted:
@@ -130,6 +139,18 @@ class HardwareInLoopBoundary:
             raise PermissionError("governed authority does not bind the exact actuation command")
         if not all((authority.capability_id, authority.lease_id, authority.fence_id)):
             raise PermissionError("governed authority is incomplete")
+        claims = self._admission_proof_verifier.verify(
+            proof,
+            tenant_id=request.tenant_id,
+            project_id=request.project_id,
+            device_id=request.device_id,
+            attempt_id=request.attempt_id,
+            request_digest=request.command_digest,
+        )
+        if (claims.capability_id, claims.lease_id, claims.fence_id) != (
+            authority.capability_id, authority.lease_id, authority.fence_id
+        ):
+            raise PermissionError("signed admission proof does not match Phase 16 authority")
         evidence = self._actuator.apply(request)
         if not isinstance(evidence, ExecutionEvidence):
             raise TypeError("actuator must return ExecutionEvidence")
