@@ -92,7 +92,9 @@ def test_hil_rejects_denied_phase16_admission():
 def test_hil_binds_attempt_to_governed_authority():
     cmd = command()
     actuator = Actuator()
-    req = ActuationRequest(cmd.tenant_id, cmd.project_id, cmd.target_id, str(uuid4()), GovernedHoareClient.digest_request(cmd, "artifact", context()), dict(cmd.parameters), cmd, "artifact", context())
+    req = request(cmd)
+    # Simulate hostile mutation bypassing the frozen dataclass API.
+    object.__setattr__(req, "attempt_id", str(uuid4()))
     with pytest.raises(ValueError, match="attempt identity"):
         HardwareInLoopBoundary(actuator).execute(req, governed_authority(cmd))
     assert actuator.calls == 0
@@ -190,13 +192,22 @@ def test_hil_rejects_actuation_request_rebound_to_altered_command(field, value):
     authority = governed_authority(cmd)
     original = request(cmd)
     actuator = Actuator()
-    rebound = ActuationRequest(
-        original.tenant_id, original.project_id, original.device_id, original.attempt_id,
-        GovernedHoareClient.digest_request(altered, "artifact", context()),
-        dict(altered.parameters), altered, "artifact", context()
-    )
-    with pytest.raises(PermissionError, match="does not bind"):
-        HardwareInLoopBoundary(actuator).execute(rebound, authority)
+    if field == "target_id":
+        # A target mismatch is rejected while constructing the request.
+        with pytest.raises(ValueError, match="target"):
+            ActuationRequest(
+                original.tenant_id, original.project_id, original.device_id, original.attempt_id,
+                GovernedHoareClient.digest_request(altered, "artifact", context()),
+                dict(altered.parameters), altered, "artifact", context()
+            )
+    else:
+        rebound = ActuationRequest(
+            original.tenant_id, original.project_id, original.device_id, original.attempt_id,
+            GovernedHoareClient.digest_request(altered, "artifact", context()),
+            dict(altered.parameters), altered, "artifact", context()
+        )
+        with pytest.raises(PermissionError, match="does not bind"):
+            HardwareInLoopBoundary(actuator).execute(rebound, authority)
     assert actuator.calls == 0
 
 
