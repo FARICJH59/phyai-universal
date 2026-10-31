@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 from typing import Callable, Mapping, Protocol
 import json
 import secrets
@@ -217,7 +218,7 @@ class HoareLeaseFenceAdapter(LeaseFenceVerifier):
         fence_id: str,
     ) -> LeaseFenceSnapshot:
         now = self._clock()
-        if isinstance(now, bool) or not isinstance(now, (int, float)) or now < 0:
+        if isinstance(now, bool) or not isinstance(now, (int, float)) or not isfinite(now) or now < 0:
             raise PermissionError("lease verifier clock is invalid")
         nonce = self._nonce_factory()
         request = LeaseFenceLookup(
@@ -285,7 +286,7 @@ def require_current_lease_fence(
 ) -> None:
     if not isinstance(snapshot, LeaseFenceSnapshot):
         raise PermissionError("authoritative lease/fence state is unavailable")
-    if isinstance(now, bool) or not isinstance(now, (int, float)):
+    if isinstance(now, bool) or not isinstance(now, (int, float)) or not isfinite(now):
         raise PermissionError("lease/fence verifier clock is invalid")
     expected = (
         tenant_id, project_id, device_id, capability_id, lease_id, fence_id, fence_id
