@@ -264,6 +264,7 @@ class SQLiteEvidenceStore:
     """
 
     def __init__(self, database_path: str, *, timeout_seconds: float = 5.0) -> None:
+        import math
         import os
         import sqlite3
 
@@ -271,7 +272,12 @@ class SQLiteEvidenceStore:
             raise ValueError("database_path must be a non-empty filesystem path")
         if database_path == ":memory:":
             raise ValueError("SQLiteEvidenceStore requires a persistent database file")
-        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)) or timeout_seconds <= 0:
+        if (
+            isinstance(timeout_seconds, bool)
+            or not isinstance(timeout_seconds, (int, float))
+            or not math.isfinite(float(timeout_seconds))
+            or timeout_seconds <= 0
+        ):
             raise ValueError("timeout_seconds must be a positive finite number")
         self._database_path = os.fspath(database_path)
         self._timeout_seconds = float(timeout_seconds)
@@ -358,7 +364,6 @@ class EvidenceVerifier:
     def _commit_receipt(self, evidence: ExecutionEvidence) -> DurableReceipt:
         receipt_digest = DurableReceipt.compute_digest(evidence.identity_digest, evidence.attempt_id, evidence.sequence, evidence.result_digest)
         receipt = DurableReceipt(evidence.identity_digest, evidence.attempt_id, evidence.sequence, evidence.result_digest, receipt_digest, _provenance_token=_RECEIPT_FACTORY_TOKEN)
-        if self._store.contains(receipt.receipt_digest):
+        if not self._store.commit_if_absent(receipt):
             raise ValueError("duplicate receipt replay")
-        self._store.record(receipt)
         return receipt
