@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
+from types import MappingProxyType
 from typing import Mapping
 
 from src.phase1_contracts.contracts import ControlCommand
@@ -24,6 +25,7 @@ class Phase16AdmissionEnvelope:
     artifact_hash: str
     policy_digest: str
     admission: GovernedAdmission
+    policy_context: Mapping[str, str]
 
     def __post_init__(self) -> None:
         if not self.artifact_hash.strip() or not self.policy_digest.strip():
@@ -34,6 +36,13 @@ class Phase16AdmissionEnvelope:
             raise ValueError("admission attempt identity mismatch")
         if not self.command.tenant_id or not self.command.project_id:
             raise ValueError("command tenant/project identity is required")
+        frozen_context = MappingProxyType(dict(self.policy_context))
+        object.__setattr__(self, "policy_context", frozen_context)
+        expected_request_digest = GovernedHoareClient.digest_request(
+            self.command, self.artifact_hash, frozen_context
+        )
+        if self.admission.request_digest != expected_request_digest:
+            raise ValueError("admission request digest does not bind envelope command")
 
 
 class Phase16To17Boundary:
@@ -54,8 +63,11 @@ class Phase16To17Boundary:
         if policy_context.get("policy_digest") != policy_digest:
             raise ValueError("policy digest mismatch")
         admission = self._hoare_client.admit(command, artifact_hash, policy_context)
-        envelope = Phase16AdmissionEnvelope(command, artifact_hash, policy_digest, admission)
-        identity = ExecutionIdentity.from_governed_admission(command, artifact_hash, policy_digest, admission)
+        envelope = Phase16AdmissionEnvelope(command, artifact_hash, policy_digest, admission, dict(policy_context))
+        identity = ExecutionIdentity.from_governed_admission(
+            command, artifact_hash, policy_digest, admission,
+            policy_context=envelope.policy_context,
+        )
         artifact = sign_admission(identity, self._signer)
         return envelope, artifact
 
@@ -67,12 +79,30 @@ class Phase16To17Boundary:
         *,
         expected_device_id: str,
     ):
-        if admission_artifact.identity.attempt_id != envelope.command.attempt_id:
-            raise ValueError("signed admission attempt identity mismatch")
         if admission_artifact.identity.artifact_hash != envelope.artifact_hash:
             raise ValueError("signed admission artifact mismatch")
         if admission_artifact.identity.policy_digest != envelope.policy_digest:
             raise ValueError("signed admission policy mismatch")
+        # Recompute at evidence commit because ControlCommand.parameters may be a mutable mapping.
+        expected_request_digest = GovernedHoareClient.digest_request(
+            envelope.command, envelope.artifact_hash, envelope.policy_context
+        )
+        if envelope.admission.request_digest != expected_request_digest:
+            raise ValueError("admission request digest no longer binds envelope command")
+        if admission_artifact.identity.request_digest != expected_request_digest:
+            raise ValueError("signed admission request digest mismatch")
+        identity = admission_artifact.identity
+        if (identity.tenant_id, identity.project_id, identity.command_id, identity.attempt_id) != (
+            envelope.command.tenant_id, envelope.command.project_id,
+            envelope.command.command_id, envelope.command.attempt_id,
+        ):
+            raise ValueError("signed admission command identity mismatch")
+        if (identity.capability_id, identity.lease_id, identity.fence_id) != (
+            envelope.admission.capability_id, envelope.admission.lease_id, envelope.admission.fence_id,
+        ):
+            raise ValueError("signed admission authority mismatch")
+        if admission_artifact.identity.attempt_id != envelope.command.attempt_id:
+            raise ValueError("signed admission attempt identity mismatch")
         return self._evidence_verifier.commit_verified_evidence(admission_artifact, evidence, self._signer, expected_device_id=expected_device_id)
 
 

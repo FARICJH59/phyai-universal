@@ -15,3 +15,5 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install -e ".[test]"
       - run: python -m pytest tests/unit/test_phase3_simulation.py -q
+      - name: Verify simulation-only governed gripper demo
+        run: python -m pytest tests/unit/test_governed_gripper_demo.py -q

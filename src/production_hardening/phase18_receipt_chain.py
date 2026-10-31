@@ -20,13 +20,17 @@ class ReceiptChainEntry:
     chain_digest: str
 
     def __post_init__(self) -> None:
-        for name, value in (("identity_digest", self.identity_digest), ("result_digest", self.result_digest)):
-            if not value.strip():
+        for name, value in (("identity_digest", self.identity_digest), ("result_digest", self.result_digest), ("chain_digest", self.chain_digest)):
+            if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} is required")
-        if self.sequence < 0:
-            raise ValueError("sequence must be nonnegative")
-        if self.previous_receipt_digest is not None and not self.previous_receipt_digest.strip():
-            raise ValueError("previous_receipt_digest cannot be empty")
+        if not isinstance(self.attempt_id, UUID):
+            raise ValueError("attempt_id must be a UUID")
+        if isinstance(self.sequence, bool) or not isinstance(self.sequence, int) or self.sequence < 0:
+            raise ValueError("sequence must be a nonnegative integer")
+        if self.previous_receipt_digest is not None and (
+            not isinstance(self.previous_receipt_digest, str) or not self.previous_receipt_digest.strip()
+        ):
+            raise ValueError("previous_receipt_digest must be a non-empty string when provided")
         if self.chain_digest != self.compute_digest(self.identity_digest, self.attempt_id, self.sequence, self.result_digest, self.previous_receipt_digest):
             raise ValueError("chain digest mismatch")
 
@@ -119,3 +123,125 @@ class ReceiptChain:
         )
         self._store.append(entry)
         return entry
+
+
+
+class SQLiteReceiptChainStore:
+    """Persistent, transactionally append-only SQLite receipt-chain store.
+
+    The database is scoped to one identity/attempt chain, matching the current
+    Phase 18 contract. It is not a multi-host consensus or replication service.
+    """
+
+    _SCHEMA = """
+        CREATE TABLE IF NOT EXISTS phase18_receipt_chain (
+            ordinal INTEGER PRIMARY KEY AUTOINCREMENT,
+            identity_digest TEXT NOT NULL,
+            attempt_id TEXT NOT NULL,
+            sequence INTEGER NOT NULL CHECK (sequence >= 0),
+            result_digest TEXT NOT NULL,
+            previous_receipt_digest TEXT,
+            chain_digest TEXT NOT NULL UNIQUE,
+            UNIQUE(identity_digest, attempt_id, sequence)
+        )
+    """
+
+    def __init__(self, database_path: str, *, timeout_seconds: float = 5.0) -> None:
+        import math
+        import os
+        import sqlite3
+
+        if not isinstance(database_path, str) or not database_path.strip():
+            raise ValueError("database_path must be a non-empty filesystem path")
+        if database_path == ":memory:":
+            raise ValueError("SQLiteReceiptChainStore requires a persistent database file")
+        if (
+            isinstance(timeout_seconds, bool)
+            or not isinstance(timeout_seconds, (int, float))
+            or not math.isfinite(float(timeout_seconds))
+            or timeout_seconds <= 0
+        ):
+            raise ValueError("timeout_seconds must be a positive finite number")
+        self._database_path = os.fspath(database_path)
+        self._timeout_seconds = float(timeout_seconds)
+        with sqlite3.connect(self._database_path, timeout=self._timeout_seconds) as connection:
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA synchronous=FULL")
+            connection.execute(self._SCHEMA)
+
+    def append(self, entry: ReceiptChainEntry) -> None:
+        import sqlite3
+
+        if not isinstance(entry, ReceiptChainEntry):
+            raise TypeError("entry must be a validated ReceiptChainEntry")
+        connection = sqlite3.connect(
+            self._database_path, timeout=self._timeout_seconds, isolation_level=None
+        )
+        try:
+            connection.execute("PRAGMA synchronous=FULL")
+            connection.execute("BEGIN IMMEDIATE")
+            previous = connection.execute(
+                """
+                SELECT identity_digest, attempt_id, sequence, chain_digest
+                FROM phase18_receipt_chain ORDER BY ordinal DESC LIMIT 1
+                """
+            ).fetchone()
+            if previous is None:
+                if entry.previous_receipt_digest is not None:
+                    raise ValueError("first receipt must reference genesis")
+            else:
+                previous_identity, previous_attempt, previous_sequence, previous_digest = previous
+                if entry.previous_receipt_digest != previous_digest:
+                    raise ValueError("receipt chain predecessor mismatch")
+                if entry.identity_digest != previous_identity:
+                    raise ValueError("receipt chain identity mismatch")
+                if str(entry.attempt_id) != previous_attempt:
+                    raise ValueError("receipt chain attempt mismatch")
+                if entry.sequence <= previous_sequence:
+                    raise ValueError("receipt chain sequence must increase")
+            connection.execute(
+                """
+                INSERT INTO phase18_receipt_chain
+                    (identity_digest, attempt_id, sequence, result_digest,
+                     previous_receipt_digest, chain_digest)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    entry.identity_digest, str(entry.attempt_id), entry.sequence,
+                    entry.result_digest, entry.previous_receipt_digest, entry.chain_digest,
+                ),
+            )
+            connection.execute("COMMIT")
+        except sqlite3.IntegrityError as exc:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise ValueError("duplicate receipt chain entry") from exc
+        except Exception:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise
+        finally:
+            connection.close()
+
+    def entries(self) -> tuple[ReceiptChainEntry, ...]:
+        import sqlite3
+
+        with sqlite3.connect(self._database_path, timeout=self._timeout_seconds) as connection:
+            rows = connection.execute(
+                """
+                SELECT identity_digest, attempt_id, sequence, result_digest,
+                       previous_receipt_digest, chain_digest
+                FROM phase18_receipt_chain ORDER BY ordinal ASC
+                """
+            ).fetchall()
+        return tuple(
+            ReceiptChainEntry(
+                identity_digest=row[0],
+                attempt_id=UUID(row[1]),
+                sequence=row[2],
+                result_digest=row[3],
+                previous_receipt_digest=row[4],
+                chain_digest=row[5],
+            )
+            for row in rows
+        )
