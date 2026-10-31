@@ -1,4 +1,4 @@
-name: Phase 15 HIL Boundary
+name: Phase 15 HIL Boundary # lease adapter contract verification 2026-10-31
 
 on:
   push:
