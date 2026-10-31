@@ -203,3 +203,74 @@ def test_receipt_factory_rejects_invalid_identity_fields():
         DurableReceipt("identity", "not-a-uuid", 1, "result", digest, _provenance_token=evidence_module._RECEIPT_FACTORY_TOKEN)
     with pytest.raises(ValueError, match="result_digest"):
         DurableReceipt("identity", attempt, 1, "", digest, _provenance_token=evidence_module._RECEIPT_FACTORY_TOKEN)
+
+
+
+def test_sqlite_evidence_store_persists_receipts_across_reopen(tmp_path):
+    from src.production_hardening.phase17_evidence import SQLiteEvidenceStore
+
+    signer = HMACSHA256Signer("key-1", b"persistent-test-secret")
+    admission = sign_admission(governed_identity(), signer)
+    evidence = ExecutionEvidence(
+        admission.identity_digest, admission.identity.attempt_id,
+        "jetson-1", 1, 10, "persistent-result", admission.signature,
+    )
+    database_path = str(tmp_path / "phase17-evidence.sqlite3")
+    first_store = SQLiteEvidenceStore(database_path)
+    receipt = EvidenceVerifier(first_store).commit_verified_evidence(
+        admission, evidence, signer, expected_device_id="jetson-1"
+    )
+    assert first_store.contains(receipt.receipt_digest)
+
+    reopened_store = SQLiteEvidenceStore(database_path)
+    assert reopened_store.contains(receipt.receipt_digest)
+    with pytest.raises(ValueError, match="duplicate receipt replay"):
+        EvidenceVerifier(reopened_store).commit_verified_evidence(
+            admission, evidence, signer, expected_device_id="jetson-1"
+        )
+
+
+def test_sqlite_evidence_store_commits_duplicate_receipt_atomically(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from src.production_hardening.phase17_evidence import SQLiteEvidenceStore
+
+    signer = HMACSHA256Signer("key-1", b"concurrency-test-secret")
+    admission = sign_admission(governed_identity(), signer)
+    evidence = ExecutionEvidence(
+        admission.identity_digest, admission.identity.attempt_id,
+        "jetson-1", 7, 70, "concurrent-result", admission.signature,
+    )
+    store = SQLiteEvidenceStore(str(tmp_path / "phase17-concurrency.sqlite3"))
+    verifier = EvidenceVerifier(store)
+
+    def commit_once():
+        try:
+            verifier.commit_verified_evidence(
+                admission, evidence, signer, expected_device_id="jetson-1"
+            )
+            return "committed"
+        except ValueError as exc:
+            if "duplicate receipt replay" in str(exc):
+                return "duplicate"
+            raise
+
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        outcomes = list(executor.map(lambda _: commit_once(), range(24)))
+
+    assert outcomes.count("committed") == 1
+    assert outcomes.count("duplicate") == 23
+
+
+@pytest.mark.parametrize("timeout_seconds", [True, 0, -1, float("nan"), float("inf")])
+def test_sqlite_evidence_store_rejects_invalid_timeout(tmp_path, timeout_seconds):
+    from src.production_hardening.phase17_evidence import SQLiteEvidenceStore
+
+    with pytest.raises(ValueError, match="timeout_seconds"):
+        SQLiteEvidenceStore(str(tmp_path / "invalid-timeout.sqlite3"), timeout_seconds=timeout_seconds)
+
+
+def test_sqlite_evidence_store_rejects_in_memory_database():
+    from src.production_hardening.phase17_evidence import SQLiteEvidenceStore
+
+    with pytest.raises(ValueError, match="persistent database file"):
+        SQLiteEvidenceStore(":memory:")
