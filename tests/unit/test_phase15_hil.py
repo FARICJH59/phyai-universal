@@ -15,6 +15,7 @@ from src.production_hardening.phase15_hil import (
 from src.production_hardening.admission_proof import (
     AdmissionClaims, Ed25519AdmissionProofVerifier, sign_admission_claims,
 )
+from src.production_hardening.lease_fencing import LeaseFenceSnapshot, LeaseFenceVerifier
 from src.production_hardening.phase16_hoare_integration import GovernedHoareClient, TransportAdmission
 
 
@@ -30,6 +31,26 @@ _TEST_VERIFIER = Ed25519AdmissionProofVerifier(
 )
 
 
+class FakeLeaseFenceVerifier(LeaseFenceVerifier):
+    def __init__(self, **overrides):
+        self.overrides = overrides
+        self.calls = 0
+
+    def validate_current(self, **expected):
+        self.calls += 1
+        values = {
+            **expected,
+            "current_fence_id": expected["fence_id"],
+            "lease_expires_at": _TEST_NOW + 30,
+            "revoked": False,
+        }
+        values.update(self.overrides)
+        return LeaseFenceSnapshot(**values)
+
+
+_TEST_LEASE_VERIFIER = FakeLeaseFenceVerifier()
+
+
 def signed_proof(cmd):
     digest = GovernedHoareClient.digest_request(cmd, "artifact", context())
     claims = AdmissionClaims(
@@ -41,10 +62,10 @@ def signed_proof(cmd):
     return sign_admission_claims(claims, _TEST_PRIVATE_KEY)
 
 
-def execute_with_proof(actuator, req, authority, original_command):
-    return HardwareInLoopBoundary(actuator, _TEST_VERIFIER).execute(
-        req, authority, signed_proof(original_command)
-    )
+def execute_with_proof(actuator, req, authority, original_command, lease_verifier=None):
+    return HardwareInLoopBoundary(
+        actuator, _TEST_VERIFIER, lease_verifier or FakeLeaseFenceVerifier(), clock=lambda: _TEST_NOW
+    ).execute(req, authority, signed_proof(original_command))
 
 
 class FakeTransport:
@@ -100,7 +121,7 @@ def test_hil_rejects_fabricated_structural_authority():
     cmd = command()
     req = request(cmd)
     with pytest.raises(PermissionError, match="requires Phase 16"):
-        HardwareInLoopBoundary(actuator, _TEST_VERIFIER).execute(req, fabricated, signed_proof(cmd))
+        HardwareInLoopBoundary(actuator, _TEST_VERIFIER, _TEST_LEASE_VERIFIER, clock=lambda: _TEST_NOW).execute(req, fabricated, signed_proof(cmd))
     assert actuator.calls == 0
 
 
@@ -128,7 +149,7 @@ def test_hil_rejects_signed_proof_for_different_authority_lease():
     )
     proof = sign_admission_claims(claims, _TEST_PRIVATE_KEY)
     with pytest.raises(PermissionError, match="does not match Phase 16 authority"):
-        HardwareInLoopBoundary(actuator, _TEST_VERIFIER).execute(req, authority, proof)
+        HardwareInLoopBoundary(actuator, _TEST_VERIFIER, FakeLeaseFenceVerifier(), clock=lambda: _TEST_NOW).execute(req, authority, proof)
     assert actuator.calls == 0
 
 
@@ -136,9 +157,29 @@ def test_hil_requires_a_signed_proof_argument():
     cmd = command()
     actuator = Actuator()
     with pytest.raises(TypeError):
-        HardwareInLoopBoundary(actuator, _TEST_VERIFIER).execute(
+        HardwareInLoopBoundary(actuator, _TEST_VERIFIER, FakeLeaseFenceVerifier(), clock=lambda: _TEST_NOW).execute(
             request(cmd), governed_authority(cmd)
         )
+    assert actuator.calls == 0
+
+
+
+@pytest.mark.parametrize(
+    "overrides,error",
+    [
+        ({"revoked": True}, "revoked"),
+        ({"lease_expires_at": _TEST_NOW}, "expired"),
+        ({"current_fence_id": "newer-fence"}, "stale or fencing"),
+        ({"lease_id": "different-lease"}, "stale or fencing"),
+    ],
+)
+def test_hil_fails_closed_on_revoked_expired_or_stale_lease(overrides, error):
+    cmd = command()
+    actuator = Actuator()
+    verifier = FakeLeaseFenceVerifier(**overrides)
+    with pytest.raises(PermissionError, match=error):
+        execute_with_proof(actuator, request(cmd), governed_authority(cmd), cmd, verifier)
+    assert verifier.calls == 1
     assert actuator.calls == 0
 
 
