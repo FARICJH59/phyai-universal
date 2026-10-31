@@ -108,9 +108,11 @@ def test_device_attestation_rejects_attestation_for_another_sequence(tmp_path):
 def test_device_challenge_store_survives_reopen_and_rejects_nonce_reuse(tmp_path):
     path = str(tmp_path / "reopen.sqlite3")
     first = SQLiteDeviceChallengeStore(path)
-    assert first.consume_once("nonce-1", "binding-1")
+    assert first.consume_once("nonce-1", "binding-1", "device-a", 4)
     reopened = SQLiteDeviceChallengeStore(path)
-    assert not reopened.consume_once("nonce-1", "binding-1")
+    assert not reopened.consume_once("nonce-1", "binding-1", "device-a", 5)
+    assert not reopened.consume_once("nonce-2", "binding-2", "device-a", 4)
+    assert reopened.consume_once("nonce-3", "binding-3", "device-a", 5)
 
 
 def test_device_challenge_store_rejects_memory_database():
@@ -259,3 +261,30 @@ def test_combined_commit_does_not_persist_when_device_attestation_fails(tmp_path
             evidence.result_digest,
         )
     )
+
+
+def test_device_attestation_rejects_non_monotonic_sequence_with_fresh_nonce(tmp_path):
+    from src.production_hardening.device_attestation import DeviceEvidenceChallenge
+
+    verifier, first_challenge, first_attestation, first_evidence = fixture(tmp_path)
+    verifier.verify(first_challenge, first_attestation, first_evidence, now_ns=1_200)
+
+    # A newly issued nonce cannot authorize a sequence already consumed by this device.
+    second_challenge = issue_device_challenge(
+        first_challenge.device_id, first_challenge.attempt_id, 7,
+        now_ns=1_250, lifetime_ns=500,
+    )
+    second_attestation = create_device_attestation(
+        second_challenge, timestamp_ns=1_300,
+        result_digest="sha256:second-result",
+        signer=HMACDeviceEvidenceSigner(
+            "device-key-01", b"device-reference-secret-material-32-bytes-minimum"
+        ),
+    )
+    second_evidence = ExecutionEvidence(
+        first_evidence.identity_digest, first_evidence.attempt_id,
+        first_evidence.device_id, 7, 1_300, "sha256:second-result",
+        first_evidence.admission_signature,
+    )
+    with pytest.raises(PermissionError, match="replay"):
+        verifier.verify(second_challenge, second_attestation, second_evidence, now_ns=1_350)
