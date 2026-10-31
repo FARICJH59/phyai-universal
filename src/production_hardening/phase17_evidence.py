@@ -165,10 +165,14 @@ class ExecutionEvidence:
 
     def __post_init__(self) -> None:
         for name, value in (("identity_digest", self.identity_digest), ("device_id", self.device_id), ("result_digest", self.result_digest), ("admission_signature", self.admission_signature)):
-            if not value.strip():
+            if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} is required")
-        if self.sequence < 0 or self.timestamp_ns < 0:
-            raise ValueError("sequence and timestamp_ns must be nonnegative")
+        if not isinstance(self.attempt_id, UUID):
+            raise ValueError("attempt_id must be a UUID")
+        if isinstance(self.sequence, bool) or not isinstance(self.sequence, int) or self.sequence < 0:
+            raise ValueError("sequence must be a nonnegative integer")
+        if isinstance(self.timestamp_ns, bool) or not isinstance(self.timestamp_ns, int) or self.timestamp_ns < 0:
+            raise ValueError("timestamp_ns must be a nonnegative integer")
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -182,6 +186,16 @@ class DurableReceipt:
     def __init__(self, identity_digest: str, attempt_id: UUID, sequence: int, result_digest: str, receipt_digest: str, *, _provenance_token: object | None = None) -> None:
         if _provenance_token is not _RECEIPT_FACTORY_TOKEN:
             raise PermissionError("durable receipt must originate from verified evidence")
+        if not isinstance(identity_digest, str) or not identity_digest.strip():
+            raise ValueError("identity_digest is required")
+        if not isinstance(attempt_id, UUID):
+            raise ValueError("attempt_id must be a UUID")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0:
+            raise ValueError("sequence must be a nonnegative integer")
+        if not isinstance(result_digest, str) or not result_digest.strip():
+            raise ValueError("result_digest is required")
+        if not isinstance(receipt_digest, str) or not receipt_digest.strip():
+            raise ValueError("receipt_digest is required")
         if receipt_digest != self.compute_digest(identity_digest, attempt_id, sequence, result_digest):
             raise ValueError("receipt digest mismatch")
         object.__setattr__(self, "identity_digest", identity_digest)
