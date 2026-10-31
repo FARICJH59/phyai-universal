@@ -1,6 +1,8 @@
 from uuid import uuid4
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from src.phase1_contracts.contracts import ControlCommand
 from src.production_hardening.phase15_hil import (
@@ -10,7 +12,60 @@ from src.production_hardening.phase15_hil import (
     HardwareObservation,
     validate_sensor_sequence,
 )
+from src.production_hardening.admission_proof import (
+    AdmissionClaims, Ed25519AdmissionProofVerifier, sign_admission_claims,
+)
+from src.production_hardening.lease_fencing import LeaseFenceSnapshot, LeaseFenceVerifier
 from src.production_hardening.phase16_hoare_integration import GovernedHoareClient, TransportAdmission
+
+
+
+_TEST_PRIVATE_KEY = Ed25519PrivateKey.generate()
+_TEST_PUBLIC_KEY = _TEST_PRIVATE_KEY.public_key().public_bytes(
+    encoding=serialization.Encoding.Raw,
+    format=serialization.PublicFormat.Raw,
+)
+_TEST_NOW = 1_800_000_000
+_TEST_VERIFIER = Ed25519AdmissionProofVerifier(
+    {"test-hoare-key": _TEST_PUBLIC_KEY}, clock=lambda: _TEST_NOW
+)
+
+
+class FakeLeaseFenceVerifier(LeaseFenceVerifier):
+    def __init__(self, **overrides):
+        self.overrides = overrides
+        self.calls = 0
+
+    def validate_current(self, **expected):
+        self.calls += 1
+        values = {
+            **expected,
+            "current_fence_id": expected["fence_id"],
+            "lease_expires_at": _TEST_NOW + 30,
+            "revoked": False,
+        }
+        values.update(self.overrides)
+        return LeaseFenceSnapshot(**values)
+
+
+_TEST_LEASE_VERIFIER = FakeLeaseFenceVerifier()
+
+
+def signed_proof(cmd):
+    digest = GovernedHoareClient.digest_request(cmd, "artifact", context())
+    claims = AdmissionClaims(
+        authority_id="hoare-test", tenant_id=cmd.tenant_id, project_id=cmd.project_id,
+        device_id=cmd.target_id, attempt_id=str(cmd.attempt_id), request_digest=digest,
+        capability_id="cap-1", lease_id="lease-1", fence_id="fence-1",
+        key_id="test-hoare-key", issued_at=_TEST_NOW - 1, expires_at=_TEST_NOW + 30,
+    )
+    return sign_admission_claims(claims, _TEST_PRIVATE_KEY)
+
+
+def execute_with_proof(actuator, req, authority, original_command, lease_verifier=None):
+    return HardwareInLoopBoundary(
+        actuator, _TEST_VERIFIER, lease_verifier or FakeLeaseFenceVerifier(), clock=lambda: _TEST_NOW
+    ).execute(req, authority, signed_proof(original_command))
 
 
 class FakeTransport:
@@ -52,7 +107,9 @@ class Actuator:
 
 
 def request(cmd):
-    return ActuationRequest(cmd.tenant_id, cmd.project_id, "robot-1", str(cmd.attempt_id), "command-digest", {"velocity": 1.0})
+    ctx = context()
+    digest = GovernedHoareClient.digest_request(cmd, "artifact", ctx)
+    return ActuationRequest(cmd.tenant_id, cmd.project_id, cmd.target_id, str(cmd.attempt_id), digest, dict(cmd.parameters), cmd, "artifact", ctx)
 
 
 def test_hil_rejects_fabricated_structural_authority():
@@ -64,17 +121,66 @@ def test_hil_rejects_fabricated_structural_authority():
     cmd = command()
     req = request(cmd)
     with pytest.raises(PermissionError, match="requires Phase 16"):
-        HardwareInLoopBoundary(actuator).execute(req, fabricated)
+        HardwareInLoopBoundary(actuator, _TEST_VERIFIER, _TEST_LEASE_VERIFIER, clock=lambda: _TEST_NOW).execute(req, fabricated, signed_proof(cmd))
     assert actuator.calls == 0
 
 
 def test_hil_accepts_only_phase16_governed_admission():
     cmd = command()
     actuator = Actuator()
-    evidence = HardwareInLoopBoundary(actuator).execute(request(cmd), governed_authority(cmd))
+    evidence = execute_with_proof(actuator, request(cmd), governed_authority(cmd), cmd)
     assert evidence.verified
     assert evidence.attempt_id == str(cmd.attempt_id)
     assert actuator.calls == 1
+
+
+
+def test_hil_rejects_signed_proof_for_different_authority_lease():
+    cmd = command()
+    req = request(cmd)
+    authority = governed_authority(cmd)
+    actuator = Actuator()
+    claims = AdmissionClaims(
+        authority_id="hoare-test", tenant_id=cmd.tenant_id, project_id=cmd.project_id,
+        device_id=cmd.target_id, attempt_id=str(cmd.attempt_id),
+        request_digest=req.command_digest, capability_id="cap-1", lease_id="other-lease",
+        fence_id="fence-1", key_id="test-hoare-key",
+        issued_at=_TEST_NOW - 1, expires_at=_TEST_NOW + 30,
+    )
+    proof = sign_admission_claims(claims, _TEST_PRIVATE_KEY)
+    with pytest.raises(PermissionError, match="does not match Phase 16 authority"):
+        HardwareInLoopBoundary(actuator, _TEST_VERIFIER, FakeLeaseFenceVerifier(), clock=lambda: _TEST_NOW).execute(req, authority, proof)
+    assert actuator.calls == 0
+
+
+def test_hil_requires_a_signed_proof_argument():
+    cmd = command()
+    actuator = Actuator()
+    with pytest.raises(TypeError):
+        HardwareInLoopBoundary(actuator, _TEST_VERIFIER, FakeLeaseFenceVerifier(), clock=lambda: _TEST_NOW).execute(
+            request(cmd), governed_authority(cmd)
+        )
+    assert actuator.calls == 0
+
+
+
+@pytest.mark.parametrize(
+    "overrides,error",
+    [
+        ({"revoked": True}, "revoked"),
+        ({"lease_expires_at": _TEST_NOW}, "expired"),
+        ({"current_fence_id": "newer-fence"}, "stale or fencing"),
+        ({"lease_id": "different-lease"}, "stale or fencing"),
+    ],
+)
+def test_hil_fails_closed_on_revoked_expired_or_stale_lease(overrides, error):
+    cmd = command()
+    actuator = Actuator()
+    verifier = FakeLeaseFenceVerifier(**overrides)
+    with pytest.raises(PermissionError, match=error):
+        execute_with_proof(actuator, request(cmd), governed_authority(cmd), cmd, verifier)
+    assert verifier.calls == 1
+    assert actuator.calls == 0
 
 
 def test_hil_rejects_denied_phase16_admission():
@@ -83,23 +189,25 @@ def test_hil_rejects_denied_phase16_admission():
     authority = GovernedHoareClient(FakeTransport(denied)).admit(cmd, "artifact", context())
     actuator = Actuator()
     with pytest.raises(PermissionError, match="admission denied"):
-        HardwareInLoopBoundary(actuator).execute(request(cmd), authority)
+        execute_with_proof(actuator, request(cmd), authority, cmd)
     assert actuator.calls == 0
 
 
 def test_hil_binds_attempt_to_governed_authority():
     cmd = command()
     actuator = Actuator()
-    req = ActuationRequest(cmd.tenant_id, cmd.project_id, "robot-1", str(uuid4()), "command-digest", {"velocity": 1.0})
+    req = request(cmd)
+    # Simulate hostile mutation bypassing the frozen dataclass API.
+    object.__setattr__(req, "attempt_id", str(uuid4()))
     with pytest.raises(ValueError, match="attempt identity"):
-        HardwareInLoopBoundary(actuator).execute(req, governed_authority(cmd))
+        execute_with_proof(actuator, req, governed_authority(cmd), cmd)
     assert actuator.calls == 0
 
 
 def test_hil_rejects_unverified_evidence():
     cmd = command()
     with pytest.raises(RuntimeError, match="evidence failed verification"):
-        HardwareInLoopBoundary(Actuator(False)).execute(request(cmd), governed_authority(cmd))
+        execute_with_proof(Actuator(False), request(cmd), governed_authority(cmd), cmd)
 
 
 def test_sensor_sequence_preserves_tenant_project_and_order():
@@ -126,3 +234,109 @@ def test_sensor_sequence_rejects_replay_or_reordering():
     ]
     with pytest.raises(ValueError, match="sequence must increase"):
         validate_sensor_sequence(observations)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_hardware_observation_rejects_non_finite_values(value):
+    with pytest.raises(ValueError, match="finite"):
+        HardwareObservation("tenant", "project", "robot-1", 0, 10, (value,))
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), True])
+def test_actuation_request_rejects_non_finite_or_boolean_parameters(value):
+    cmd = command()
+    ctx = context()
+    digest = GovernedHoareClient.digest_request(cmd, "artifact", ctx)
+    with pytest.raises(ValueError, match="finite"):
+        ActuationRequest(
+            cmd.tenant_id, cmd.project_id, cmd.target_id, str(cmd.attempt_id),
+            digest, {"velocity": value}, cmd, "artifact", ctx
+        )
+
+
+def test_sensor_sequence_rejects_timestamp_regression():
+    observations = [
+        HardwareObservation("tenant", "project", "robot-1", 0, 20, (1.0,)),
+        HardwareObservation("tenant", "project", "robot-1", 1, 10, (2.0,)),
+    ]
+    with pytest.raises(ValueError, match="timestamp must increase"):
+        validate_sensor_sequence(observations)
+
+
+def test_sensor_sequence_rejects_device_identity_change():
+    observations = [
+        HardwareObservation("tenant", "project", "robot-1", 0, 10, (1.0,)),
+        HardwareObservation("tenant", "project", "robot-2", 1, 20, (2.0,)),
+    ]
+    with pytest.raises(ValueError, match="device identity changed"):
+        validate_sensor_sequence(observations)
+
+
+def test_execution_evidence_rejects_invalid_verified_type():
+    with pytest.raises(ValueError, match="verified must be a boolean"):
+        ExecutionEvidence("attempt", "robot-1", 1, "digest", 1)
+
+
+def test_observation_rejects_integer_too_large_for_finite_float():
+    with pytest.raises(ValueError, match="finite"):
+        HardwareObservation("tenant", "project", "robot-1", 0, 10, (10 ** 10000,))
+
+
+@pytest.mark.parametrize("field,value", [
+    ("target_id", "robot-2"),
+    ("command_type", "emergency_stop"),
+    ("parameters", {"velocity": 9.0}),
+    ("confidence", 0.1),
+    ("sequence", 99),
+])
+def test_hil_rejects_actuation_request_rebound_to_altered_command(field, value):
+    from dataclasses import replace
+    cmd = command()
+    altered = replace(cmd, **{field: value})
+    authority = governed_authority(cmd)
+    original = request(cmd)
+    actuator = Actuator()
+    if field == "target_id":
+        # A target mismatch is rejected while constructing the request.
+        with pytest.raises(ValueError, match="target"):
+            ActuationRequest(
+                original.tenant_id, original.project_id, original.device_id, original.attempt_id,
+                GovernedHoareClient.digest_request(altered, "artifact", context()),
+                dict(altered.parameters), altered, "artifact", context()
+            )
+    else:
+        rebound = ActuationRequest(
+            original.tenant_id, original.project_id, original.device_id, original.attempt_id,
+            GovernedHoareClient.digest_request(altered, "artifact", context()),
+            dict(altered.parameters), altered, "artifact", context()
+        )
+        with pytest.raises(PermissionError, match="does not bind"):
+            execute_with_proof(actuator, rebound, authority, cmd)
+    assert actuator.calls == 0
+
+
+def test_hil_rechecks_mutable_command_parameters_immediately_before_actuator():
+    cmd = command()
+    authority = governed_authority(cmd)
+    req = request(cmd)
+    cmd.parameters["velocity"] = 999.0
+    actuator = Actuator()
+    with pytest.raises(ValueError, match="parameters do not match"):
+        execute_with_proof(actuator, req, authority, cmd)
+    assert actuator.calls == 0
+
+
+def test_hil_rejects_wrong_artifact_or_policy_context_binding():
+    cmd = command()
+    authority = governed_authority(cmd)
+    req = request(cmd)
+    altered_context = {**context(), "policy_digest": "different-policy"}
+    altered_digest = GovernedHoareClient.digest_request(cmd, "different-artifact", altered_context)
+    rebound = ActuationRequest(
+        req.tenant_id, req.project_id, req.device_id, req.attempt_id,
+        altered_digest, dict(cmd.parameters), cmd, "different-artifact", altered_context
+    )
+    actuator = Actuator()
+    with pytest.raises(PermissionError, match="does not bind"):
+        execute_with_proof(actuator, rebound, authority, cmd)
+    assert actuator.calls == 0
