@@ -20,13 +20,17 @@ class ReceiptChainEntry:
     chain_digest: str
 
     def __post_init__(self) -> None:
-        for name, value in (("identity_digest", self.identity_digest), ("result_digest", self.result_digest)):
-            if not value.strip():
+        for name, value in (("identity_digest", self.identity_digest), ("result_digest", self.result_digest), ("chain_digest", self.chain_digest)):
+            if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} is required")
-        if self.sequence < 0:
-            raise ValueError("sequence must be nonnegative")
-        if self.previous_receipt_digest is not None and not self.previous_receipt_digest.strip():
-            raise ValueError("previous_receipt_digest cannot be empty")
+        if not isinstance(self.attempt_id, UUID):
+            raise ValueError("attempt_id must be a UUID")
+        if isinstance(self.sequence, bool) or not isinstance(self.sequence, int) or self.sequence < 0:
+            raise ValueError("sequence must be a nonnegative integer")
+        if self.previous_receipt_digest is not None and (
+            not isinstance(self.previous_receipt_digest, str) or not self.previous_receipt_digest.strip()
+        ):
+            raise ValueError("previous_receipt_digest must be a non-empty string when provided")
         if self.chain_digest != self.compute_digest(self.identity_digest, self.attempt_id, self.sequence, self.result_digest, self.previous_receipt_digest):
             raise ValueError("chain digest mismatch")
 
