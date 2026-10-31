@@ -361,6 +361,32 @@ class EvidenceVerifier:
         self.verify_evidence(admission, evidence, signer, expected_device_id=expected_device_id)
         return self._commit_receipt(evidence)
 
+    def commit_verified_evidence_with_device_attestation(
+        self,
+        admission: SignedAdmissionArtifact,
+        evidence: ExecutionEvidence,
+        signer: AdmissionSigner,
+        *,
+        expected_device_id: str,
+        challenge: object,
+        attestation: object,
+        device_attestation_verifier: object,
+        now_ns: int,
+    ) -> DurableReceipt:
+        """Verify governance and device authenticity before atomic receipt commit.
+
+        Device attestation is an additive policy path. Existing callers retain
+        the prior admission-only contract until they explicitly select this path.
+        """
+        self.verify_evidence(
+            admission, evidence, signer, expected_device_id=expected_device_id
+        )
+        verify_device = getattr(device_attestation_verifier, "verify", None)
+        if not callable(verify_device):
+            raise TypeError("device_attestation_verifier must provide verify()")
+        verify_device(challenge, attestation, evidence, now_ns=now_ns)
+        return self._commit_receipt(evidence)
+
     def _commit_receipt(self, evidence: ExecutionEvidence) -> DurableReceipt:
         receipt_digest = DurableReceipt.compute_digest(evidence.identity_digest, evidence.attempt_id, evidence.sequence, evidence.result_digest)
         receipt = DurableReceipt(evidence.identity_digest, evidence.attempt_id, evidence.sequence, evidence.result_digest, receipt_digest, _provenance_token=_RECEIPT_FACTORY_TOKEN)
