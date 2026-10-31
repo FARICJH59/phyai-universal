@@ -113,6 +113,35 @@ def test_hil_accepts_only_phase16_governed_admission():
     assert actuator.calls == 1
 
 
+
+def test_hil_rejects_signed_proof_for_different_authority_lease():
+    cmd = command()
+    req = request(cmd)
+    authority = governed_authority(cmd)
+    actuator = Actuator()
+    claims = AdmissionClaims(
+        authority_id="hoare-test", tenant_id=cmd.tenant_id, project_id=cmd.project_id,
+        device_id=cmd.target_id, attempt_id=str(cmd.attempt_id),
+        request_digest=req.command_digest, capability_id="cap-1", lease_id="other-lease",
+        fence_id="fence-1", key_id="test-hoare-key",
+        issued_at=_TEST_NOW - 1, expires_at=_TEST_NOW + 30,
+    )
+    proof = sign_admission_claims(claims, _TEST_PRIVATE_KEY)
+    with pytest.raises(PermissionError, match="does not match Phase 16 authority"):
+        HardwareInLoopBoundary(actuator, _TEST_VERIFIER).execute(req, authority, proof)
+    assert actuator.calls == 0
+
+
+def test_hil_requires_a_signed_proof_argument():
+    cmd = command()
+    actuator = Actuator()
+    with pytest.raises(TypeError):
+        HardwareInLoopBoundary(actuator, _TEST_VERIFIER).execute(
+            request(cmd), governed_authority(cmd)
+        )
+    assert actuator.calls == 0
+
+
 def test_hil_rejects_denied_phase16_admission():
     cmd = command()
     denied = TransportAdmission(False, cmd.attempt_id, None, None, None, "denied")
