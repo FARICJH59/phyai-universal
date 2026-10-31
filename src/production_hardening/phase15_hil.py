@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite
-from typing import Mapping, Protocol, Sequence
+from typing import Callable, Mapping, Protocol, Sequence
+import time
 
 from src.phase1_contracts.contracts import ControlCommand
 from src.production_hardening.admission_proof import AdmissionProofVerifier, SignedAdmissionProof
+from src.production_hardening.lease_fencing import (
+    LeaseFenceVerifier, require_current_lease_fence,
+)
 from src.production_hardening.phase16_hoare_integration import GovernedAdmission, GovernedHoareClient
 
 
@@ -115,11 +119,22 @@ class PhysicalActuator(Protocol):
 class HardwareInLoopBoundary:
     """Physical I/O boundary that accepts only sealed Phase-16 authority."""
 
-    def __init__(self, actuator: PhysicalActuator, admission_proof_verifier: AdmissionProofVerifier) -> None:
+    def __init__(
+        self,
+        actuator: PhysicalActuator,
+        admission_proof_verifier: AdmissionProofVerifier,
+        lease_fence_verifier: LeaseFenceVerifier,
+        *,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
         if not isinstance(admission_proof_verifier, AdmissionProofVerifier):
             raise TypeError("a trusted HOARE admission proof verifier is required")
+        if not isinstance(lease_fence_verifier, LeaseFenceVerifier):
+            raise TypeError("a live HOARE lease/fence verifier is required")
         self._actuator = actuator
         self._admission_proof_verifier = admission_proof_verifier
+        self._lease_fence_verifier = lease_fence_verifier
+        self._clock = clock
 
     def execute(
         self,
@@ -151,6 +166,24 @@ class HardwareInLoopBoundary:
             authority.capability_id, authority.lease_id, authority.fence_id
         ):
             raise PermissionError("signed admission proof does not match Phase 16 authority")
+        lease_snapshot = self._lease_fence_verifier.validate_current(
+            tenant_id=request.tenant_id,
+            project_id=request.project_id,
+            device_id=request.device_id,
+            capability_id=claims.capability_id,
+            lease_id=claims.lease_id,
+            fence_id=claims.fence_id,
+        )
+        require_current_lease_fence(
+            lease_snapshot,
+            tenant_id=request.tenant_id,
+            project_id=request.project_id,
+            device_id=request.device_id,
+            capability_id=claims.capability_id,
+            lease_id=claims.lease_id,
+            fence_id=claims.fence_id,
+            now=self._clock(),
+        )
         evidence = self._actuator.apply(request)
         if not isinstance(evidence, ExecutionEvidence):
             raise TypeError("actuator must return ExecutionEvidence")
