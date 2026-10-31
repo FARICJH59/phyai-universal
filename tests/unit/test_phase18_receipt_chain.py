@@ -117,3 +117,39 @@ def test_tampered_entry_fails_closed():
 def test_empty_chain_is_valid_genesis_state():
     report = ReceiptChainVerifier().verify(())
     assert report.valid and report.entries_verified == 0 and report.terminal_digest is None
+
+
+@pytest.mark.parametrize("sequence", [True, -1, 1.5, "2"])
+def test_receipt_chain_entry_rejects_invalid_sequence_types(sequence):
+    attempt = uuid4()
+    digest = ReceiptChainEntry.compute_digest("identity", attempt, sequence, "result", None)
+    with pytest.raises(ValueError, match="sequence"):
+        ReceiptChainEntry("identity", attempt, sequence, "result", None, digest)
+
+
+@pytest.mark.parametrize("attempt_id", ["not-a-uuid", None, 1])
+def test_receipt_chain_entry_requires_uuid_attempt(attempt_id):
+    with pytest.raises(ValueError, match="attempt_id"):
+        ReceiptChainEntry("identity", attempt_id, 1, "result", None, "digest")
+
+
+@pytest.mark.parametrize(
+    "field_values, message",
+    [
+        ((None, "result", "chain"), "identity_digest"),
+        (("identity", None, "chain"), "result_digest"),
+        (("identity", "result", None), "chain_digest"),
+    ],
+)
+def test_receipt_chain_entry_requires_nonempty_string_digests(field_values, message):
+    identity_digest, result_digest, chain_digest = field_values
+    with pytest.raises(ValueError, match=message):
+        ReceiptChainEntry(identity_digest, uuid4(), 1, result_digest, None, chain_digest)
+
+
+@pytest.mark.parametrize("previous", ["", 1, None])
+def test_receipt_chain_entry_validates_optional_predecessor_type(previous):
+    if previous is None:
+        pytest.skip("None is the valid genesis predecessor")
+    with pytest.raises(ValueError, match="previous_receipt_digest"):
+        ReceiptChainEntry("identity", uuid4(), 1, "result", previous, "digest")
