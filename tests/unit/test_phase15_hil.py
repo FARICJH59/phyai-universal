@@ -138,8 +138,14 @@ def test_hardware_observation_rejects_non_finite_values(value):
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), True])
 def test_actuation_request_rejects_non_finite_or_boolean_parameters(value):
+    cmd = command()
+    ctx = context()
+    digest = GovernedHoareClient.digest_request(cmd, "artifact", ctx)
     with pytest.raises(ValueError, match="finite"):
-        ActuationRequest("tenant", "project", "robot-1", "attempt", "digest", {"velocity": value})
+        ActuationRequest(
+            cmd.tenant_id, cmd.project_id, cmd.target_id, str(cmd.attempt_id),
+            digest, {"velocity": value}, cmd, "artifact", ctx
+        )
 
 
 def test_sensor_sequence_rejects_timestamp_regression():
