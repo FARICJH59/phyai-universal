@@ -165,3 +165,14 @@ def test_canonical_status_is_deterministic():
         )
     )
     assert canonical_lease_status(signed) == canonical_lease_status(signed)
+
+
+@pytest.mark.parametrize("bad_clock", [float("nan"), float("inf"), float("-inf"), True])
+def test_adapter_rejects_non_finite_or_boolean_clock(bad_clock):
+    transport = FakeHoareTransport(lambda req: status_for(req))
+    instance = HoareLeaseFenceAdapter(
+        transport, {"hoare-key-1": _PUBLIC}, clock=lambda: bad_clock,
+        nonce_factory=lambda: "n" * 64,
+    )
+    with pytest.raises(PermissionError, match="clock is invalid"):
+        validate(instance)
