@@ -211,21 +211,126 @@ class DurableReceipt:
 
 
 class EvidenceStore(Protocol):
-    def contains(self, receipt_digest: str) -> bool: ...
-    def record(self, receipt: DurableReceipt) -> None: ...
+    """Atomic receipt persistence contract.
+
+    Implementations must make the uniqueness check and insert one indivisible
+    operation. A contains-then-record sequence is not sufficient under concurrency.
+    """
+
+    def commit_if_absent(self, receipt: DurableReceipt) -> bool: ...
 
 
 class InMemoryEvidenceStore:
+    """Process-local test/reference store; not durable across restarts."""
+
     def __init__(self) -> None:
+        from threading import Lock
+
         self._receipts: dict[str, DurableReceipt] = {}
+        self._lock = Lock()
 
     def contains(self, receipt_digest: str) -> bool:
-        return receipt_digest in self._receipts
+        with self._lock:
+            return receipt_digest in self._receipts
+
+    def commit_if_absent(self, receipt: DurableReceipt) -> bool:
+        with self._lock:
+            if receipt.receipt_digest in self._receipts:
+                return False
+            self._receipts[receipt.receipt_digest] = receipt
+            return True
 
     def record(self, receipt: DurableReceipt) -> None:
-        if self.contains(receipt.receipt_digest):
+        if not self.commit_if_absent(receipt):
             raise ValueError("duplicate receipt replay")
-        self._receipts[receipt.receipt_digest] = receipt
+
+
+class SQLiteEvidenceStore:
+    """Durable SQLite receipt store with an atomic, unique receipt commit.
+
+    The database file must live on storage whose durability and backup properties
+    are appropriate for the deployment. This adapter does not provide remote
+    replication, encryption-at-rest, key custody, or multi-host consensus.
+    """
+
+    _SCHEMA = """
+        CREATE TABLE IF NOT EXISTS phase17_evidence_receipts (
+            receipt_digest TEXT PRIMARY KEY,
+            identity_digest TEXT NOT NULL,
+            attempt_id TEXT NOT NULL,
+            sequence INTEGER NOT NULL CHECK (sequence >= 0),
+            result_digest TEXT NOT NULL
+        )
+    """
+
+    def __init__(self, database_path: str, *, timeout_seconds: float = 5.0) -> None:
+        import os
+        import sqlite3
+
+        if not isinstance(database_path, str) or not database_path.strip():
+            raise ValueError("database_path must be a non-empty filesystem path")
+        if database_path == ":memory:":
+            raise ValueError("SQLiteEvidenceStore requires a persistent database file")
+        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)) or timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be a positive finite number")
+        self._database_path = os.fspath(database_path)
+        self._timeout_seconds = float(timeout_seconds)
+        with sqlite3.connect(self._database_path, timeout=self._timeout_seconds) as connection:
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA synchronous=FULL")
+            connection.execute(self._SCHEMA)
+
+    def contains(self, receipt_digest: str) -> bool:
+        import sqlite3
+
+        with sqlite3.connect(self._database_path, timeout=self._timeout_seconds) as connection:
+            row = connection.execute(
+                "SELECT 1 FROM phase17_evidence_receipts WHERE receipt_digest = ?",
+                (receipt_digest,),
+            ).fetchone()
+            return row is not None
+
+    def commit_if_absent(self, receipt: DurableReceipt) -> bool:
+        import sqlite3
+
+        if not isinstance(receipt, DurableReceipt):
+            raise TypeError("receipt must be a verified DurableReceipt")
+        connection = sqlite3.connect(
+            self._database_path, timeout=self._timeout_seconds, isolation_level=None
+        )
+        try:
+            connection.execute("PRAGMA synchronous=FULL")
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO phase17_evidence_receipts
+                        (receipt_digest, identity_digest, attempt_id, sequence, result_digest)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        receipt.receipt_digest,
+                        receipt.identity_digest,
+                        str(receipt.attempt_id),
+                        receipt.sequence,
+                        receipt.result_digest,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                connection.execute("ROLLBACK")
+                return False
+            connection.execute("COMMIT")
+            return True
+        except Exception:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise
+        finally:
+            connection.close()
+
+    def record(self, receipt: DurableReceipt) -> None:
+        if not self.commit_if_absent(receipt):
+            raise ValueError("duplicate receipt replay")
 
 
 class EvidenceVerifier:
