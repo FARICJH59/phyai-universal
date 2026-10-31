@@ -67,6 +67,22 @@ class ActuationRequest:
             raise TypeError("policy_context must be a mapping")
         self.validate_governed_binding()
 
+    def validate_governed_binding(self) -> None:
+        command = self.governed_command
+        if (self.tenant_id, self.project_id, self.attempt_id) != (
+            command.tenant_id, command.project_id, str(command.attempt_id)
+        ):
+            raise ValueError("actuation identity does not match governed command")
+        if self.device_id != command.target_id:
+            raise ValueError("actuation target does not match governed command target")
+        if dict(self.parameters) != dict(command.parameters):
+            raise ValueError("actuation parameters do not match governed command")
+        expected = GovernedHoareClient.digest_request(
+            command, self.artifact_hash, self.policy_context
+        )
+        if self.command_digest != expected:
+            raise ValueError("actuation command digest does not match governed command")
+
 
 @dataclass(frozen=True, slots=True)
 class ExecutionEvidence:
@@ -85,23 +101,6 @@ class ExecutionEvidence:
             raise ValueError("sequence must be a non-negative integer")
         if not isinstance(self.verified, bool):
             raise ValueError("verified must be a boolean")
-
-
-    def validate_governed_binding(self) -> None:
-        command = self.governed_command
-        if (self.tenant_id, self.project_id, self.attempt_id) != (
-            command.tenant_id, command.project_id, str(command.attempt_id)
-        ):
-            raise ValueError("actuation identity does not match governed command")
-        if self.device_id != command.target_id:
-            raise ValueError("actuation target does not match governed command target")
-        if dict(self.parameters) != dict(command.parameters):
-            raise ValueError("actuation parameters do not match governed command")
-        expected = GovernedHoareClient.digest_request(
-            command, self.artifact_hash, self.policy_context
-        )
-        if self.command_digest != expected:
-            raise ValueError("actuation command digest does not match governed command")
 
 
 class PhysicalSensor(Protocol):
