@@ -52,7 +52,9 @@ class Actuator:
 
 
 def request(cmd):
-    return ActuationRequest(cmd.tenant_id, cmd.project_id, "robot-1", str(cmd.attempt_id), "command-digest", {"velocity": 1.0})
+    ctx = context()
+    digest = GovernedHoareClient.digest_request(cmd, "artifact", ctx)
+    return ActuationRequest(cmd.tenant_id, cmd.project_id, cmd.target_id, str(cmd.attempt_id), digest, dict(cmd.parameters), cmd, "artifact", ctx)
 
 
 def test_hil_rejects_fabricated_structural_authority():
@@ -90,7 +92,7 @@ def test_hil_rejects_denied_phase16_admission():
 def test_hil_binds_attempt_to_governed_authority():
     cmd = command()
     actuator = Actuator()
-    req = ActuationRequest(cmd.tenant_id, cmd.project_id, "robot-1", str(uuid4()), "command-digest", {"velocity": 1.0})
+    req = ActuationRequest(cmd.tenant_id, cmd.project_id, cmd.target_id, str(uuid4()), GovernedHoareClient.digest_request(cmd, "artifact", context()), dict(cmd.parameters), cmd, "artifact", context())
     with pytest.raises(ValueError, match="attempt identity"):
         HardwareInLoopBoundary(actuator).execute(req, governed_authority(cmd))
     assert actuator.calls == 0
@@ -166,3 +168,54 @@ def test_execution_evidence_rejects_invalid_verified_type():
 def test_observation_rejects_integer_too_large_for_finite_float():
     with pytest.raises(ValueError, match="finite"):
         HardwareObservation("tenant", "project", "robot-1", 0, 10, (10 ** 10000,))
+
+
+@pytest.mark.parametrize("field,value", [
+    ("target_id", "robot-2"),
+    ("command_type", "emergency_stop"),
+    ("parameters", {"velocity": 9.0}),
+    ("confidence", 0.1),
+    ("sequence", 99),
+])
+def test_hil_rejects_actuation_request_rebound_to_altered_command(field, value):
+    from dataclasses import replace
+    cmd = command()
+    altered = replace(cmd, **{field: value})
+    authority = governed_authority(cmd)
+    original = request(cmd)
+    actuator = Actuator()
+    rebound = ActuationRequest(
+        original.tenant_id, original.project_id, original.device_id, original.attempt_id,
+        GovernedHoareClient.digest_request(altered, "artifact", context()),
+        dict(altered.parameters), altered, "artifact", context()
+    )
+    with pytest.raises(PermissionError, match="does not bind"):
+        HardwareInLoopBoundary(actuator).execute(rebound, authority)
+    assert actuator.calls == 0
+
+
+def test_hil_rechecks_mutable_command_parameters_immediately_before_actuator():
+    cmd = command()
+    authority = governed_authority(cmd)
+    req = request(cmd)
+    cmd.parameters["velocity"] = 999.0
+    actuator = Actuator()
+    with pytest.raises(ValueError, match="parameters do not match"):
+        HardwareInLoopBoundary(actuator).execute(req, authority)
+    assert actuator.calls == 0
+
+
+def test_hil_rejects_wrong_artifact_or_policy_context_binding():
+    cmd = command()
+    authority = governed_authority(cmd)
+    req = request(cmd)
+    altered_context = {**context(), "policy_digest": "different-policy"}
+    altered_digest = GovernedHoareClient.digest_request(cmd, "different-artifact", altered_context)
+    rebound = ActuationRequest(
+        req.tenant_id, req.project_id, req.device_id, req.attempt_id,
+        altered_digest, dict(cmd.parameters), cmd, "different-artifact", altered_context
+    )
+    actuator = Actuator()
+    with pytest.raises(PermissionError, match="does not bind"):
+        HardwareInLoopBoundary(actuator).execute(rebound, authority)
+    assert actuator.calls == 0
