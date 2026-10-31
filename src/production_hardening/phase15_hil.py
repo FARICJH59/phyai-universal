@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from math import isfinite
 from typing import Mapping, Protocol, Sequence
 
-from src.production_hardening.phase16_hoare_integration import GovernedAdmission
+from src.phase1_contracts.contracts import ControlCommand
+from src.production_hardening.phase16_hoare_integration import GovernedAdmission, GovernedHoareClient
 
 
 def _finite_number(value: object) -> bool:
@@ -44,6 +45,9 @@ class ActuationRequest:
     attempt_id: str
     command_digest: str
     parameters: Mapping[str, float]
+    governed_command: ControlCommand
+    artifact_hash: str
+    policy_context: Mapping[str, str]
 
     def __post_init__(self) -> None:
         if not all(isinstance(item, str) and item.strip() for item in (
@@ -55,6 +59,13 @@ class ActuationRequest:
         if any(not isinstance(key, str) or not key.strip() or not _finite_number(value)
                for key, value in self.parameters.items()):
             raise ValueError("actuation parameter names and values must be valid and finite")
+        if not isinstance(self.governed_command, ControlCommand):
+            raise TypeError("actuation request requires the exact governed ControlCommand")
+        if not isinstance(self.artifact_hash, str) or not self.artifact_hash.strip():
+            raise ValueError("artifact_hash is required")
+        if not isinstance(self.policy_context, Mapping):
+            raise TypeError("policy_context must be a mapping")
+        self.validate_governed_binding()
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +85,23 @@ class ExecutionEvidence:
             raise ValueError("sequence must be a non-negative integer")
         if not isinstance(self.verified, bool):
             raise ValueError("verified must be a boolean")
+
+
+    def validate_governed_binding(self) -> None:
+        command = self.governed_command
+        if (self.tenant_id, self.project_id, self.attempt_id) != (
+            command.tenant_id, command.project_id, str(command.attempt_id)
+        ):
+            raise ValueError("actuation identity does not match governed command")
+        if self.device_id != command.target_id:
+            raise ValueError("actuation target does not match governed command target")
+        if dict(self.parameters) != dict(command.parameters):
+            raise ValueError("actuation parameters do not match governed command")
+        expected = GovernedHoareClient.digest_request(
+            command, self.artifact_hash, self.policy_context
+        )
+        if self.command_digest != expected:
+            raise ValueError("actuation command digest does not match governed command")
 
 
 class PhysicalSensor(Protocol):
@@ -97,6 +125,10 @@ class HardwareInLoopBoundary:
             raise PermissionError("HOARE admission denied; physical actuation blocked")
         if str(authority.attempt_id) != request.attempt_id:
             raise ValueError("governed authority attempt identity mismatch")
+        # Recompute at dispatch: ControlCommand is frozen, but its parameters mapping may be mutable.
+        request.validate_governed_binding()
+        if authority.request_digest != request.command_digest:
+            raise PermissionError("governed authority does not bind the exact actuation command")
         if not all((authority.capability_id, authority.lease_id, authority.fence_id)):
             raise PermissionError("governed authority is incomplete")
         evidence = self._actuator.apply(request)
