@@ -47,6 +47,8 @@ class DeviceEvidenceChallenge:
             raise ValueError("attempt_id must be a UUID")
         _nonnegative_int("sequence", self.sequence)
         _required_text("nonce", self.nonce)
+        if len(self.nonce) < 32:
+            raise ValueError("nonce must contain at least 32 characters")
         _nonnegative_int("issued_at_ns", self.issued_at_ns)
         _nonnegative_int("expires_at_ns", self.expires_at_ns)
         if self.expires_at_ns <= self.issued_at_ns:
@@ -101,7 +103,9 @@ class DeviceKeyRegistry(Protocol):
 
 
 class DeviceChallengeStore(Protocol):
-    def consume_once(self, nonce: str, binding_digest: str) -> bool: ...
+    def consume_once(
+        self, nonce: str, binding_digest: str, device_id: str, sequence: int
+    ) -> bool: ...
 
 
 class DeviceEvidenceSigner(Protocol):
@@ -163,10 +167,20 @@ class SQLiteDeviceChallengeStore:
                     binding_digest TEXT NOT NULL
                 )
             """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS phase_device_sequence_counters (
+                    device_id TEXT PRIMARY KEY,
+                    last_sequence INTEGER NOT NULL CHECK (last_sequence >= 0)
+                )
+            """)
 
-    def consume_once(self, nonce: str, binding_digest: str) -> bool:
+    def consume_once(
+        self, nonce: str, binding_digest: str, device_id: str, sequence: int
+    ) -> bool:
         _required_text("nonce", nonce)
         _required_text("binding_digest", binding_digest)
+        _required_text("device_id", device_id)
+        _nonnegative_int("sequence", sequence)
         connection = sqlite3.connect(self._path, timeout=self._timeout, isolation_level=None)
         try:
             connection.execute("PRAGMA synchronous=FULL")
@@ -179,6 +193,21 @@ class SQLiteDeviceChallengeStore:
             except sqlite3.IntegrityError:
                 connection.execute("ROLLBACK")
                 return False
+            previous = connection.execute(
+                "SELECT last_sequence FROM phase_device_sequence_counters WHERE device_id = ?",
+                (device_id,),
+            ).fetchone()
+            if previous is not None and sequence <= previous[0]:
+                connection.execute("ROLLBACK")
+                return False
+            connection.execute(
+                """
+                INSERT INTO phase_device_sequence_counters (device_id, last_sequence)
+                VALUES (?, ?)
+                ON CONFLICT(device_id) DO UPDATE SET last_sequence = excluded.last_sequence
+                """,
+                (device_id, sequence),
+            )
             connection.execute("COMMIT")
             return True
         except Exception:
@@ -297,5 +326,7 @@ class DeviceAttestationVerifier:
         if not hmac.compare_digest(expected, attestation.signature):
             raise PermissionError("invalid device evidence signature")
         binding = sha256(payload + b"|" + attestation.signature.encode("ascii")).hexdigest()
-        if not self._challenge_store.consume_once(challenge.nonce, binding):
+        if not self._challenge_store.consume_once(
+            challenge.nonce, binding, challenge.device_id, challenge.sequence
+        ):
             raise PermissionError("device challenge replay detected")
