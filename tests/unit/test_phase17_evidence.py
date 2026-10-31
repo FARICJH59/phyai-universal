@@ -161,3 +161,45 @@ def test_verified_evidence_is_required_for_commit_path():
     assert receipt.receipt_digest == DurableReceipt.compute_digest(admission.identity_digest, admission.identity.attempt_id, 1, "result")
     with pytest.raises(ValueError, match="duplicate receipt replay"):
         verifier.commit_verified_evidence(admission, evidence, signer, expected_device_id="jetson-1")
+
+
+
+@pytest.mark.parametrize("sequence", [True, -1, 1.5, "2"])
+def test_execution_evidence_rejects_invalid_sequence_types(sequence):
+    admission = sign_admission(governed_identity(), HMACSHA256Signer("key-1", b"secret"))
+    with pytest.raises(ValueError, match="sequence"):
+        ExecutionEvidence(admission.identity_digest, admission.identity.attempt_id, "jetson-1", sequence, 10, "result", admission.signature)
+
+
+@pytest.mark.parametrize("timestamp_ns", [True, -1, 1.5, "10"])
+def test_execution_evidence_rejects_invalid_timestamp_types(timestamp_ns):
+    admission = sign_admission(governed_identity(), HMACSHA256Signer("key-1", b"secret"))
+    with pytest.raises(ValueError, match="timestamp_ns"):
+        ExecutionEvidence(admission.identity_digest, admission.identity.attempt_id, "jetson-1", 1, timestamp_ns, "result", admission.signature)
+
+
+def test_execution_evidence_requires_uuid_attempt_and_string_digests():
+    admission = sign_admission(governed_identity(), HMACSHA256Signer("key-1", b"secret"))
+    with pytest.raises(ValueError, match="attempt_id"):
+        ExecutionEvidence(admission.identity_digest, "not-a-uuid", "jetson-1", 1, 10, "result", admission.signature)
+    with pytest.raises(ValueError, match="result_digest"):
+        ExecutionEvidence(admission.identity_digest, admission.identity.attempt_id, "jetson-1", 1, 10, 123, admission.signature)
+
+
+@pytest.mark.parametrize("sequence", [True, -1, 1.5, "2"])
+def test_receipt_factory_rejects_invalid_sequence_types(sequence):
+    from src.production_hardening import phase17_evidence as evidence_module
+    attempt = uuid4()
+    digest = DurableReceipt.compute_digest("identity", attempt, sequence, "result")
+    with pytest.raises(ValueError, match="sequence"):
+        DurableReceipt("identity", attempt, sequence, "result", digest, _provenance_token=evidence_module._RECEIPT_FACTORY_TOKEN)
+
+
+def test_receipt_factory_rejects_invalid_identity_fields():
+    from src.production_hardening import phase17_evidence as evidence_module
+    attempt = uuid4()
+    digest = DurableReceipt.compute_digest("identity", attempt, 1, "result")
+    with pytest.raises(ValueError, match="attempt_id"):
+        DurableReceipt("identity", "not-a-uuid", 1, "result", digest, _provenance_token=evidence_module._RECEIPT_FACTORY_TOKEN)
+    with pytest.raises(ValueError, match="result_digest"):
+        DurableReceipt("identity", attempt, 1, "", digest, _provenance_token=evidence_module._RECEIPT_FACTORY_TOKEN)
